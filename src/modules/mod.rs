@@ -1,2 +1,4 @@
 pub mod card;
-pub mod poker;
+pub mod games;
+pub mod player;
+pub mod hands;

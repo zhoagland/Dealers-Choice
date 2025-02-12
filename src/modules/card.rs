@@ -1,5 +1,5 @@
-#[derive(Debug, PartialEq)]
-enum Suit {
+#[derive(Debug, PartialEq, Eq)]
+pub enum Suit {
     Hearts,
     Spades,
     Diamonds,
@@ -7,20 +7,20 @@ enum Suit {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum Rank {
-    Ace,
-    Two,
-    Three,
-    Four,
-    Five,
-    Six,
-    Seven,
-    Eight,
-    Nine,
-    Ten,
-    Jack,
-    Queen,
-    King
+pub enum Rank {
+    Ace = 1,
+    Two = 2,
+    Three = 3,
+    Four = 4,
+    Five = 5,
+    Six = 6,
+    Seven = 7,
+    Eight = 8,
+    Nine = 9,
+    Ten = 10,
+    Jack = 11,
+    Queen = 12,
+    King = 13, 
 }
 
 impl Rank {
@@ -44,10 +44,10 @@ impl Rank {
 }
 
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Card {
-    suit : Suit,
-    rank : Rank,
+    pub suit : Suit,
+    pub rank : Rank,
 }
 
 impl Card {

@@ -1,5 +1,4 @@
-use crate::modules::card::Card as Card;
-
+use super::player::Player as Player;
 
 #[derive(Debug)]
 enum PokerGame {
@@ -23,39 +22,6 @@ impl GameRules {
         }
     }
 }
-
-#[derive(Debug)]
-struct Strategy {
-    bluff_percentage : u8,
-
-}
-
-impl Strategy {
-    pub fn new() -> Strategy {
-        Strategy {
-            bluff_percentage: 1
-        }
-    }
-}
-
-#[derive(Debug)]
-struct Player {
-    hand : Vec<Card>,
-    chip_count: u128,
-    stratagy: Strategy,
-
-}      
-
-impl Player {
-    pub fn new() -> Player {
-        Player { 
-            hand: Vec::new(),
-            chip_count: 100,
-            stratagy: Strategy::new(),
-        }
-    }
-}
-
 
 #[derive(Debug)]
 struct Game {
