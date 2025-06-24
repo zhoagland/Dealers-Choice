@@ -6,7 +6,10 @@ pub enum Suit {
     Clubs
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+/// Represents the rank of a card in a standard deck.
+/// The ranks are ordered from Ace (1) to King (13).
+/// The Ace is considered the lowest rank in this implementation.
 pub enum Rank {
     Ace = 1,
     Two = 2,
