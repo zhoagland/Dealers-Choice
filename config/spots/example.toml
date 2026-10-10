@@ -1,0 +1,15 @@
+# dc spot config/spots/example.toml
+# 3-handed, $20 stacks. Seat 0 (hero, AhKh) opened to $3 from the button, seat 1 folded,
+# seat 2 (big blind) called. Flop Qh 7h 2c, seat 2 checks. What should the hero do?
+seats = 3
+button = 0
+stacks = [20.0, 20.0, 20.0]
+hero = 0
+hero_cards = "AhKh"
+board = "Qh 7h 2c"
+actions = ["r 3", "f", "c", "c"]
+playouts = 200000
+
+[ranges]
+# Big blind's calling range.
+2 = "22-99, ATs-A2s, KTs+, QTs+, JTs, T9s, 98s, AJo-ATo, KQo, KJo"
