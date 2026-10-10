@@ -558,6 +558,88 @@ impl Game for Holdem {
     fn eval_unit(&self) -> Chips {
         self.config.big_blind
     }
+
+    fn describe_observation(&self, obs: &Observation) -> String {
+        // Pot and stacks are public, so any determinization reports the right ones. A fixed
+        // seed keeps the text deterministic. Opponents' sampled cards are never printed.
+        let s = self.determinize(
+            obs,
+            &mut engine::UniformSampler,
+            &mut engine::rng::rng_from_seed(0),
+        );
+        let b = &s.betting;
+        let cards = |c: &[Card]| {
+            c.iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let mut out = String::new();
+        out += &format!(
+            "Board: [{}]   Pot: {}
+",
+            cards(&obs.board()),
+            b.pot()
+        );
+        for i in 0..obs.setup.num_seats {
+            let seat = Seat(i);
+            let mut tags = Vec::new();
+            if seat == obs.setup.button {
+                tags.push("button".to_string());
+            }
+            if b.is_folded(seat) {
+                tags.push("folded".into());
+            } else if b.is_all_in(seat) {
+                tags.push("all-in".into());
+            }
+            let shown = match (&obs.shown[i as usize], seat == obs.seat) {
+                (_, true) => format!("  you: {}", cards(&obs.hole)),
+                (Some(c), false) => format!("  shows {}", cards(c)),
+                (None, false) => String::new(),
+            };
+            out += &format!(
+                "  {seat}: stack {:>8}  in this street {:>7}  {}{}
+",
+                b.stacks()[i as usize].to_string(),
+                b.street_committed(seat).to_string(),
+                tags.join(", "),
+                shown
+            );
+        }
+        if let ToAct::Seat(p) = self.to_act(&s)
+            && p == obs.seat
+        {
+            out += &format!(
+                "To call: {}
+",
+                b.owed(p)
+            );
+        }
+        out
+    }
+
+    fn describe_action(&self, a: Action) -> String {
+        match a {
+            Action::Deal(c) => format!("deal {c}"),
+            Action::Fold => "fold".into(),
+            Action::CheckCall => "check/call".into(),
+            Action::RaiseTo(x) => format!("bet/raise to {x}"),
+        }
+    }
+
+    /// `f` fold, `c`/`k` check or call, `r 6.50` / `b 6.50` bet or raise to $6.50.
+    fn parse_action(&self, input: &str, _legal: &[Action]) -> Option<Action> {
+        let mut words = input.split_whitespace();
+        match (words.next()?, words.next()) {
+            ("f", None) => Some(Action::Fold),
+            ("c" | "k", None) => Some(Action::CheckCall),
+            ("r" | "b", Some(amount)) => {
+                let dollars: f64 = amount.trim_start_matches('$').parse().ok()?;
+                Some(Action::RaiseTo(Chips::dollars(dollars)))
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Read-only accessors for renderers and tests.

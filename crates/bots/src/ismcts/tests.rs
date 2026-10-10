@@ -144,8 +144,15 @@ fn kuhn_exploitability_baseline() {
 fn holdem_calls_with_the_nuts() {
     use games::holdem::{Action, Config, Holdem};
     let game = Holdem::new(Config::default());
-    let setup = HandSetup { first_hand_of_game: false, ..HandSetup::simple(2, Chips(2_000)) };
-    let d = |s: &str| s.split_whitespace().map(|c| Action::Deal(c.parse().unwrap())).collect::<Vec<_>>();
+    let setup = HandSetup {
+        first_hand_of_game: false,
+        ..HandSetup::simple(2, Chips(2_000))
+    };
+    let d = |s: &str| {
+        s.split_whitespace()
+            .map(|c| Action::Deal(c.parse().unwrap()))
+            .collect::<Vec<_>>()
+    };
     // Seat 1 gets As Ks (cards 1 and 3); board makes a royal flush for seat 1.
     let mut log = d("As 2c Ks 7d");
     log.extend([Action::CheckCall, Action::CheckCall]);
@@ -161,7 +168,13 @@ fn holdem_calls_with_the_nuts() {
     let mut legal = Vec::new();
     game.legal_actions(&s, &mut legal);
     let mut search = Ismcts::<Holdem>::new(IsmctsConfig::default());
-    let v = search.evaluate(&game, &obs, &legal, Budget::Playouts(1_500), &mut rng_from_seed(5));
+    let v = search.evaluate(
+        &game,
+        &obs,
+        &legal,
+        Budget::Playouts(1_500),
+        &mut rng_from_seed(5),
+    );
     let q = |a: Action| v.iter().find(|x| x.action == a).unwrap().q;
     assert!(q(Action::CheckCall) > q(Action::Fold), "{v:?}");
     assert_ne!(v[0].action, Action::Fold);
@@ -182,11 +195,22 @@ fn holdem_playout_rate() {
         let a = game.sample_chance(&s, &mut rng);
         game.apply(&mut s, a);
     }
-    let ToAct::Seat(p) = game.to_act(&s) else { unreachable!() };
+    let ToAct::Seat(p) = game.to_act(&s) else {
+        unreachable!()
+    };
     let obs = game.observe(&s, p);
     let mut legal = Vec::new();
     game.legal_actions(&s, &mut legal);
     let mut search = Ismcts::<Holdem>::new(IsmctsConfig::default());
-    search.best_action(&game, &obs, &legal, Budget::Time(std::time::Duration::from_millis(500)), &mut rng);
-    println!("6-max Hold'em preflop: {} playouts in 0.5 s (target ≥ 10,000)", search.last_playouts);
+    search.best_action(
+        &game,
+        &obs,
+        &legal,
+        Budget::Time(std::time::Duration::from_millis(500)),
+        &mut rng,
+    );
+    println!(
+        "6-max Hold'em preflop: {} playouts in 0.5 s (target ≥ 10,000)",
+        search.last_playouts
+    );
 }
