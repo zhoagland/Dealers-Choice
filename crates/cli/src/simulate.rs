@@ -8,28 +8,32 @@ use clap::Args;
 use engine::Game;
 use games::registry::{GameVisitor, with_game};
 use sim::{BotSpec, RecordSink, RunReport, RunSpec, run};
-use storage::{DataRoot, ZstdRecordSink};
+use storage::{DataRoot, ProfileKind, ProfileStore, ZstdRecordSink};
 
 use crate::CliResult;
 
 #[derive(Args)]
 pub struct SimArgs {
-    /// A RunSpec TOML file. Flags below are ignored when given.
+    /// A RunSpec TOML file to start from.
     pub spec: Option<PathBuf>,
-    #[arg(long, default_value = "holdem_nl")]
-    pub game: String,
-    /// One bot per seat.
-    #[arg(long, value_delimiter = ',', default_value = "ismcts:3:300,random")]
-    pub bots: Vec<String>,
-    #[arg(long, default_value_t = 1_000)]
-    pub deals: u64,
-    #[arg(long, default_value_t = 1)]
-    pub seed: u64,
+    /// Start from `config/sims/<name>.toml` (edit with `dc config`).
+    #[arg(long, conflicts_with = "spec")]
+    pub profile: Option<String>,
+    // Flags below override the profile / file (or the defaults when neither is given).
+    #[arg(long)]
+    pub game: Option<String>,
+    /// One bot per seat, e.g. `ismcts:5:500,random`.
+    #[arg(long, value_delimiter = ',')]
+    pub bots: Option<Vec<String>>,
+    #[arg(long)]
+    pub deals: Option<u64>,
+    #[arg(long)]
+    pub seed: Option<u64>,
     #[arg(long)]
     pub no_duplicate: bool,
-    /// Fraction of hands whose records are written to `--records`.
-    #[arg(long, default_value_t = 0.0)]
-    pub history_sample: f64,
+    /// Fraction of hands whose records are kept.
+    #[arg(long)]
+    pub history_sample: Option<f64>,
     /// Where to write kept hand records (length-prefixed postcard).
     #[arg(long)]
     pub records: Option<PathBuf>,
@@ -43,6 +47,48 @@ pub struct SimArgs {
     /// Results are identical for any thread count.
     #[arg(long)]
     pub threads: Option<usize>,
+}
+
+/// What `dc sim` runs when given nothing; also the starting point for new profiles in `dc config`.
+pub fn default_spec() -> RunSpec {
+    RunSpec {
+        game: "holdem_nl".into(),
+        bots: vec!["ismcts:3:300".parse().unwrap(), BotSpec::Random],
+        deals: 1_000,
+        seed: 1,
+        duplicate: true,
+        history_sample: 0.0,
+        stack: None,
+        dealer_ante: false,
+    }
+}
+
+impl SimArgs {
+    /// Apply the flags that were given on top of `spec`.
+    fn apply(&self, mut spec: RunSpec) -> Result<RunSpec, String> {
+        if let Some(g) = &self.game {
+            spec.game = g.clone();
+        }
+        if let Some(b) = &self.bots {
+            spec.bots = b
+                .iter()
+                .map(|b| b.parse::<BotSpec>())
+                .collect::<Result<_, _>>()?;
+        }
+        if let Some(d) = self.deals {
+            spec.deals = d;
+        }
+        if let Some(s) = self.seed {
+            spec.seed = s;
+        }
+        if self.no_duplicate {
+            spec.duplicate = false;
+        }
+        if let Some(h) = self.history_sample {
+            spec.history_sample = h;
+        }
+        Ok(spec)
+    }
 }
 
 /// Size rayon's global thread pool. Must run before any parallel work.
@@ -64,29 +110,18 @@ impl RecordSink for FileSink {
     }
 }
 
-pub fn sim(args: SimArgs, root: &DataRoot) -> CliResult {
+pub fn sim(args: SimArgs, root: &DataRoot, profiles: &ProfileStore) -> CliResult {
     set_threads(args.threads)?;
-    let spec: RunSpec = match &args.spec {
-        Some(path) => {
+    let base: RunSpec = match (&args.spec, &args.profile) {
+        (Some(path), _) => {
             let text =
                 std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
             toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?
         }
-        None => RunSpec {
-            game: args.game.clone(),
-            bots: args
-                .bots
-                .iter()
-                .map(|b| b.parse::<BotSpec>())
-                .collect::<Result<_, _>>()?,
-            deals: args.deals,
-            seed: args.seed,
-            duplicate: !args.no_duplicate,
-            history_sample: args.history_sample,
-            stack: None,
-            dealer_ante: false,
-        },
+        (None, Some(name)) => profiles.load(ProfileKind::Sim, name)?,
+        (None, None) => default_spec(),
     };
+    let spec = args.apply(base)?;
     let save_dir = args
         .save
         .then(|| root.sim_run(&spec.game, &storage::files::run_id(spec.seed)));

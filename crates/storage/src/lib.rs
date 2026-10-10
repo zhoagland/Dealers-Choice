@@ -2,9 +2,12 @@
 //!
 //! - [`db`]: SQLite app state: players, bankroll ledger, human hands, coach notes.
 //! - [`files`]: the data directory: sim runs (zstd records + JSON summary) and blueprints.
+//! - [`profiles`]: named sim/play settings as TOML files under `config/`.
 
 pub mod db;
 pub mod files;
+pub mod profiles;
 
-pub use db::{Db, DbError, LedgerKind, StoredHand};
+pub use db::{Db, DbError, LedgerKind, Note, StoredHand};
 pub use files::{DataRoot, ZstdRecordSink};
+pub use profiles::{ProfileKind, ProfileStore};

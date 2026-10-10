@@ -1,0 +1,11 @@
+# dc play --profile evening   (edit with `dc config`)
+player = "you"
+bankroll = 100.0
+bots = [7, 5, 3]
+game = ""
+pool = ["holdem_nl", "ftq"]
+hints = false
+review = true
+review_playouts = 15000
+think_ms = 500
+max_games = 1000

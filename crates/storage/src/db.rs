@@ -55,6 +55,17 @@ impl LedgerKind {
     }
 }
 
+/// One coach finding for one decision.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Note {
+    /// Index into the hand's action log.
+    pub decision_idx: usize,
+    /// `None` = off-menu action, not scored.
+    pub ev_loss: Option<f64>,
+    pub se: f64,
+    pub flagged: bool,
+}
+
 /// A human hand to store, with its coach review.
 pub struct StoredHand<'a> {
     pub session_id: i64,
@@ -64,8 +75,7 @@ pub struct StoredHand<'a> {
     pub seat: u8,
     pub result: Chips,
     pub record: &'a [u8],
-    /// (decision index, EV loss or None for off-menu, SE, flagged)
-    pub notes: Vec<(usize, Option<f64>, f64, bool)>,
+    pub notes: Vec<Note>,
 }
 
 pub struct Db {
@@ -208,10 +218,10 @@ impl Db {
             params![h.session_id, h.player_id, h.game_id, h.game_version, h.seat, h.result.0, h.record, now()],
         )?;
         let id = tx.last_insert_rowid();
-        for &(idx, loss, se, flagged) in &h.notes {
+        for n in &h.notes {
             tx.execute(
                 "INSERT INTO coach_note (hand_id, decision_idx, ev_loss, se, flagged) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![id, idx as i64, loss, se, flagged],
+                params![id, n.decision_idx as i64, n.ev_loss, n.se, n.flagged],
             )?;
         }
         tx.commit()?;
@@ -231,24 +241,21 @@ impl Db {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
-    /// All coach notes for a player's hands in one game: (hand id, decision idx, loss, se, flagged).
-    pub fn coach_notes(
-        &self,
-        player_id: i64,
-        game_id: &str,
-    ) -> DbResult<Vec<(i64, usize, Option<f64>, f64, bool)>> {
+    /// All coach notes for a player's hands in one game, as (hand id, note), in order.
+    pub fn coach_notes(&self, player_id: i64, game_id: &str) -> DbResult<Vec<(i64, Note)>> {
         let mut st = self.conn.prepare(
             "SELECT n.hand_id, n.decision_idx, n.ev_loss, n.se, n.flagged FROM coach_note n
-             JOIN hand h ON h.id = n.hand_id WHERE h.player_id = ?1 AND h.game_id = ?2 ORDER BY n.hand_id, n.decision_idx",
+             JOIN hand h ON h.id = n.hand_id WHERE h.player_id = ?1 AND h.game_id = ?2
+             ORDER BY n.hand_id, n.decision_idx",
         )?;
         let rows = st.query_map(params![player_id, game_id], |r| {
-            Ok((
-                r.get(0)?,
-                r.get::<_, i64>(1)? as usize,
-                r.get(2)?,
-                r.get(3)?,
-                r.get(4)?,
-            ))
+            let note = Note {
+                decision_idx: r.get::<_, i64>(1)? as usize,
+                ev_loss: r.get(2)?,
+                se: r.get(3)?,
+                flagged: r.get(4)?,
+            };
+            Ok((r.get(0)?, note))
         })?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
@@ -304,7 +311,20 @@ mod tests {
             seat: 2,
             result: Chips(-150),
             record: &[1, 2, 3],
-            notes: vec![(4, Some(0.5), 0.1, true), (9, None, 0.2, false)],
+            notes: vec![
+                Note {
+                    decision_idx: 4,
+                    ev_loss: Some(0.5),
+                    se: 0.1,
+                    flagged: true,
+                },
+                Note {
+                    decision_idx: 9,
+                    ev_loss: None,
+                    se: 0.2,
+                    flagged: false,
+                },
+            ],
         };
         db.store_hand(&hand).unwrap();
         assert_eq!(
@@ -314,7 +334,7 @@ mod tests {
         assert!(db.hand_records(p, Some("ftq")).unwrap().is_empty());
         let notes = db.coach_notes(p, "holdem_nl").unwrap();
         assert_eq!(notes.len(), 2);
-        assert_eq!(notes[1].2, None, "off-menu loss stored as NULL");
+        assert_eq!(notes[1].1.ev_loss, None, "off-menu loss stored as NULL");
     }
 
     #[test]

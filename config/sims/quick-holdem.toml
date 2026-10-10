@@ -1,0 +1,8 @@
+# dc sim --profile quick-holdem   (edit with `dc config`)
+game = "holdem_nl"
+bots = ["ismcts:5:500", "random", "random"]
+deals = 300
+seed = 1
+duplicate = true
+history_sample = 0.0
+dealer_ante = false
