@@ -57,7 +57,7 @@ impl ActionCounts {
     fn add(&mut self, c: ActionClass) {
         match c {
             ActionClass::Fold => self.fold += 1,
-            ActionClass::CheckOrCall => self.check_call += 1,
+            ActionClass::CheckOrCall { .. } => self.check_call += 1,
             ActionClass::BetOrRaise { .. } => self.bet_raise += 1,
             _ => self.other += 1,
         }
