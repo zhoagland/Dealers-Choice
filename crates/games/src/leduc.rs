@@ -54,7 +54,7 @@ pub struct State {
     rounds: [RoundLog; 2],
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Observation {
     pub seat: Seat,
     pub button: Seat,

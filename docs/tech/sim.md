@@ -63,17 +63,26 @@ The report always prints the CI, so "A beats B" is never claimed without one.
 
 ## 5. M3 rate measurement (gates the storage decision)
 
-`dc bench-sim` runs fixed workloads and prints:
+`dc bench-sim` runs fixed workloads and prints a markdown table like the one below.
 
-| game | bots | hands/s/core | decisions/hand | bytes/hand | MB/day @ 1 core, 100% history |
-|---|---|---|---|---|---|
+**Measured 2026-10-10** (`dc bench-sim --deals 2000`, release build, 16 threads on the dev
+machine). Record size is raw postcard before compression:
 
-Pre-measurement estimate (to be replaced by real numbers):
+| Workload | hands/s | decisions/s | B/hand | Full history per day |
+|---|---|---|---|---|
+| Kuhn, random ×2 | 2.06 M | 4.6 M | 34 | 6.1 TB |
+| HU Hold'em, random ×2 | 1.59 M | 5.7 M | 52 | 7.1 TB |
+| 6-max Hold'em, random ×6 | 1.31 M | 11.7 M | 92 | 10.5 TB |
+| FTQ, random ×4 | 738 k | 10.1 M | 94 | 6.0 TB |
+| HU Hold'em, ISMCTS:7 (2k playouts) vs random | 485 | 1.9 k | 52 | 2.2 GB |
+| FTQ, ISMCTS:7 (2k) vs random ×3 | 27 | 445 | 101 | 238 MB |
+| 6-max Hold'em, ISMCTS:7 (2k) ×6 | 45 | 356 | 89 | 346 MB |
 
-| Workload | hands/s (8 cores) | bytes/hand | Full history, per day |
-|---|---|---|---|
-| random/equity bots | ~4×10⁵ | ~150 | ~5 TB, so sampling is mandatory |
-| ISMCTS preset 7 | ~3 | ~150 | ~40 MB, so keep everything |
+The pre-measurement estimate was ~4×10⁵ random hands/s; actual is ~4× higher. The cheap-vs-strong gap
+is ~4.5 orders of magnitude, as predicted. ISMCTS speed: ~84 k playouts/s per thread in Hold'em,
+~55 k in FTQ. The wild A-6 low evaluator is not a bottleneck.
 
-The difference is ~5 orders of magnitude. The storage design has to handle both: a cheap-bot run is
-mostly aggregates, a strong-bot run is mostly full histories. That's the reason for measuring first.
+**Storage decision (closes FR-ST-2):** analytics run on human players only (PRD §5.6b), so bot
+simulation records never need per-hand columnar queries. **No Parquet.** Simulation output = JSON
+summary + zstd-compressed length-prefixed postcard records. Cheap-bot runs use
+`history_sample` ≪ 1 (aggregates are the product); strong-bot runs can keep 100%.

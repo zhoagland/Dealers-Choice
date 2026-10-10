@@ -249,7 +249,8 @@ pub trait Game: Send + Sync + Sized + 'static {
     type Action: Copy + fmt::Debug + Eq + Hash + Ord + Serialize + DeserializeOwned + Send + Sync;
     /// One seat's view of the hand. Two states with equal observations for a seat must be
     /// indistinguishable to that seat; equality defines an information set.
-    type Observation: Clone + fmt::Debug + Eq + Hash + Serialize + Send + Sync;
+    /// `DeserializeOwned` because saved blueprints are keyed by observations.
+    type Observation: Clone + fmt::Debug + Eq + Hash + Serialize + DeserializeOwned + Send + Sync;
     /// Per-game tunables (blinds, structure, bot bet menu).
     type Config: Clone + fmt::Debug + Default + Serialize + DeserializeOwned + Send + Sync;
 

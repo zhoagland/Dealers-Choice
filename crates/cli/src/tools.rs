@@ -8,6 +8,7 @@ use bots::{Budget, IsmctsBot, UniformStrategy};
 use engine::Game;
 use engine::rng::rng_from_seed;
 use games::registry::{GAME_IDS, GameVisitor, with_game};
+use storage::DataRoot;
 
 use crate::CliResult;
 
@@ -43,10 +44,13 @@ pub struct TrainArgs {
     /// Report exploitability every this many iterations.
     #[arg(long, default_value_t = 20_000)]
     pub report_every: u64,
+    /// Save the final blueprint under <data_root>/blueprints/ (usable as bot `mccfr:<path>`).
+    #[arg(long)]
+    pub save: bool,
 }
 
-pub fn train(args: TrainArgs) -> CliResult {
-    struct Train<'a>(&'a TrainArgs);
+pub fn train(args: TrainArgs, root: &DataRoot) -> CliResult {
+    struct Train<'a>(&'a TrainArgs, &'a DataRoot);
     impl GameVisitor<CliResult> for Train<'_> {
         fn visit<G: Game>(self, game: G) -> CliResult {
             let a = self.0;
@@ -73,10 +77,23 @@ pub fn train(args: TrainArgs) -> CliResult {
                     trainer.info_sets()
                 );
             }
+            if a.save {
+                let path =
+                    self.1
+                        .blueprint(game.meta().id, game.meta().version, trainer.iterations());
+                std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
+                std::fs::write(&path, trainer.blueprint(&game).to_bytes())
+                    .map_err(|e| e.to_string())?;
+                println!(
+                    "saved {}  (use as bot `mccfr:{}`)",
+                    path.display(),
+                    path.display()
+                );
+            }
             Ok(())
         }
     }
-    with_game(&args.game, None, Train(&args)).map_err(|e| e.to_string())?
+    with_game(&args.game, None, Train(&args, root)).map_err(|e| e.to_string())?
 }
 
 #[derive(Args)]
