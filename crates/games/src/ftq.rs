@@ -297,7 +297,7 @@ pub enum PublicEvent {
     Declared(Seat),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Observation {
     pub seat: Seat,
     pub setup: HandSetup,

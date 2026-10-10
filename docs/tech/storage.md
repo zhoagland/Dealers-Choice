@@ -18,6 +18,16 @@ The partitioning is hive-style (`key=value` directories), so DuckDB can query ac
 
 ## 2. SQLite schema (app state)
 
+> **As implemented (M6)** in `crates/storage/migrations/0001_init.sql`, which differs from the sketch below:
+> - `player` has no `kind`/`bot_preset`: bots are never stored (infinite bankroll, and analytics
+>   are human-only per PRD §5.6b).
+> - No `game_played` table. `hand` carries `player_id`, `game_id`, `game_version`, `seat`, and
+>   `result_cents` directly, because every query in M7 is "this player's hands in this game".
+> - `ledger` adds `reset`. The CLI checks after every game that the ledger sum equals the
+>   in-memory bankroll, and stops with an error if not.
+> - Blueprints: `<data_root>/blueprints/<game>/v<version>-<iterations>.bin`, plain postcard
+>   (they're small), loaded once per process and shared.
+
 ```sql
 CREATE TABLE player (
   id          INTEGER PRIMARY KEY,
@@ -58,6 +68,9 @@ Migrations: numbered `.sql` files embedded with `include_str!`, applied in order
 Human-played hands are stored in full (they're tiny in volume). Simulated hands never go into SQLite.
 
 ## 3. Simulation output
+
+> **Decided after M3 (see sim.md §5):** no Parquet. The rest of this section is the
+> implemented design.
 
 `sim::sink::OutputSink` is implemented by `FsSink`, which writes the layout above. v1 format: JSON
 summary + zstd-compressed binary records. **Parquet is deferred** until M3 numbers show a

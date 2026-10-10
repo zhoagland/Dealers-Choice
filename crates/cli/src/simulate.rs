@@ -8,6 +8,7 @@ use clap::Args;
 use engine::Game;
 use games::registry::{GameVisitor, with_game};
 use sim::{BotSpec, RecordSink, RunReport, RunSpec, run};
+use storage::{DataRoot, ZstdRecordSink};
 
 use crate::CliResult;
 
@@ -32,6 +33,9 @@ pub struct SimArgs {
     /// Where to write kept hand records (length-prefixed postcard).
     #[arg(long)]
     pub records: Option<PathBuf>,
+    /// Save the run under <data_root>/sim/game=<id>/run=<id>/ (spec, summary, zstd records).
+    #[arg(long)]
+    pub save: bool,
     /// Where to write the JSON report (stdout summary always printed).
     #[arg(long)]
     pub report: Option<PathBuf>,
@@ -60,7 +64,7 @@ impl RecordSink for FileSink {
     }
 }
 
-pub fn sim(args: SimArgs) -> CliResult {
+pub fn sim(args: SimArgs, root: &DataRoot) -> CliResult {
     set_threads(args.threads)?;
     let spec: RunSpec = match &args.spec {
         Some(path) => {
@@ -83,7 +87,14 @@ pub fn sim(args: SimArgs) -> CliResult {
             dealer_ante: false,
         },
     };
-    let report = run_spec(&spec, args.records.as_ref())?;
+    let save_dir = args
+        .save
+        .then(|| root.sim_run(&spec.game, &storage::files::run_id(spec.seed)));
+    let report = run_spec(&spec, args.records.as_ref(), save_dir.as_ref())?;
+    if let Some(dir) = &save_dir {
+        storage::files::write_run_files(dir, &spec, &report).map_err(|e| e.to_string())?;
+        println!("saved run to {}", dir.display());
+    }
     print_report(&report);
     if let Some(path) = &args.report {
         let json = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
@@ -93,10 +104,16 @@ pub fn sim(args: SimArgs) -> CliResult {
     Ok(())
 }
 
-fn run_spec(spec: &RunSpec, records: Option<&PathBuf>) -> Result<RunReport, String> {
+/// Run a spec. Records go to `records` (a plain file) if given, else into `save_dir` as zstd.
+fn run_spec(
+    spec: &RunSpec,
+    records: Option<&PathBuf>,
+    save_dir: Option<&PathBuf>,
+) -> Result<RunReport, String> {
     struct Run<'a> {
         spec: &'a RunSpec,
         records: Option<&'a PathBuf>,
+        save_dir: Option<&'a PathBuf>,
     }
     impl GameVisitor<Result<RunReport, String>> for Run<'_> {
         fn visit<G: Game>(self, game: G) -> Result<RunReport, String> {
@@ -112,7 +129,12 @@ fn run_spec(spec: &RunSpec, records: Option<&PathBuf>) -> Result<RunReport, Stri
                 Some(p) => Box::new(FileSink(std::io::BufWriter::new(
                     std::fs::File::create(p).map_err(|e| format!("{}: {e}", p.display()))?,
                 ))),
-                None => Box::new(sim::NullSink),
+                None => match self.save_dir {
+                    Some(dir) => Box::new(
+                        ZstdRecordSink::new(dir).map_err(|e: std::io::Error| e.to_string())?,
+                    ),
+                    None => Box::new(sim::NullSink),
+                },
             };
             // Progress only on an interactive terminal; piped/logged output stays clean.
             let tty = std::io::IsTerminal::is_terminal(&std::io::stderr());
@@ -123,7 +145,16 @@ fn run_spec(spec: &RunSpec, records: Option<&PathBuf>) -> Result<RunReport, Stri
             }))
         }
     }
-    let r = with_game(&spec.game, None, Run { spec, records }).map_err(|e| e.to_string())?;
+    let r = with_game(
+        &spec.game,
+        None,
+        Run {
+            spec,
+            records,
+            save_dir,
+        },
+    )
+    .map_err(|e| e.to_string())?;
     eprintln!();
     r
 }
@@ -200,7 +231,7 @@ pub fn bench(args: BenchArgs) -> CliResult {
             stack: None,
             dealer_ante: false,
         };
-        let r = run_spec(&spec, None)?;
+        let r = run_spec(&spec, None, None)?;
         let t = &r.throughput;
         println!(
             "| {game} | {} | {:.0} | {:.0} | {:.0} | {:.1} |",
