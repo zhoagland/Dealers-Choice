@@ -72,6 +72,28 @@ pub fn side_pots(contributed: &[Chips], folded: u16) -> Vec<Pot> {
     pots
 }
 
+/// [`side_pots`] from live money, plus dead money (antes) added to the main pot, which every live
+/// seat may win. If there's no live money at all (everyone checked), the dead money is the only
+/// pot.
+pub fn build_pots(live: &[Chips], dead: Chips, folded: u16) -> Vec<Pot> {
+    let mut pots = side_pots(live, folded);
+    let all_live = ((1u32 << live.len()) - 1) as u16 & !folded;
+    match pots.first_mut() {
+        // The main pot already includes every live seat that put in live money. A live seat
+        // that put in none (only possible if all-in from the ante) still shares the dead money.
+        Some(main) => {
+            main.amount += dead;
+            main.eligible |= all_live;
+        }
+        None if dead > Chips::ZERO => pots.push(Pot {
+            amount: dead,
+            eligible: all_live,
+        }),
+        None => {}
+    }
+    pots
+}
+
 /// Split `amount` evenly among `winners`; the odd chips (cents) go one each to the winners
 /// earliest in `order` (normally starting left of the button).
 pub fn split(amount: Chips, winners: u16, order: &[Seat], out: &mut [Chips]) {
@@ -252,6 +274,39 @@ mod tests {
         let pots = side_pots(&c(&[50, 100, 100]), 0);
         let won = award_high(&pots, &[Some(3), Some(2), Some(1)], &order(3));
         assert_eq!(won, c(&[150, 100, 0]));
+    }
+
+    #[test]
+    fn dead_money_goes_to_whoever_wins_the_main_pot() {
+        // Seat 0 paid a $2 dealer ante (dead) and nobody bet: the winner (seat 1) gets it.
+        let pots = build_pots(&c(&[0, 0]), Chips(200), 0);
+        assert_eq!(
+            pots,
+            vec![Pot {
+                amount: Chips(200),
+                eligible: 0b11
+            }]
+        );
+        assert_eq!(
+            award_high(&pots, &[Some(1), Some(9)], &order(2)),
+            c(&[0, 200])
+        );
+        // With live betting, dead money joins the main pot only.
+        let pots = build_pots(&c(&[100, 300, 300]), Chips(200), 0);
+        assert_eq!(
+            pots[0],
+            Pot {
+                amount: Chips(500),
+                eligible: 0b111
+            }
+        );
+        assert_eq!(
+            pots[1],
+            Pot {
+                amount: Chips(400),
+                eligible: 0b110
+            }
+        );
     }
 
     #[test]
