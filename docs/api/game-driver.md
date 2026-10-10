@@ -104,6 +104,7 @@ pub trait Game: Send + Sync + 'static {
     fn legal_actions(&self, s: &Self::State, out: &mut Vec<Self::Action>);
 
     /// Full legality check, including off-menu bets (any legal amount from a human).
+    /// Also accepts/rejects chance actions, so `engine::replay` can verify a whole log.
     fn validate(&self, s: &Self::State, a: Self::Action) -> Result<(), IllegalAction>;
 
     /// Apply a validated action. Must panic on illegal input in debug builds.
@@ -112,10 +113,17 @@ pub trait Game: Send + Sync + 'static {
     /// Only valid when to_act == Chance. Probabilities sum to 1 (±1e-9).
     fn chance_outcomes(&self, s: &Self::State, out: &mut Vec<(Self::Action, f64)>);
 
+    /// Draw one chance outcome. Default: enumerate `chance_outcomes` and sample.
+    /// Override for speed (same distribution required).
+    fn sample_chance(&self, s: &Self::State, rng: &mut DetRng) -> Self::Action { … }
+
     /// Only valid when to_act == Terminal.
     fn payoffs(&self, s: &Self::State) -> Vec<Chips>;
 
     fn observe(&self, s: &Self::State, seat: Seat) -> Self::Observation;
+
+    /// Whose observation this is (bots need to know their own seat).
+    fn observer(&self, obs: &Self::Observation) -> Seat;
 
     /// Build a full State consistent with `obs`, sampling everything `seat` cannot see.
     fn determinize(
@@ -170,9 +178,17 @@ Bots key their trees and regret tables on `Observation` (via `Hash + Eq`), so:
 - **Under-specification bug** (something known is missing, e.g. bet order): different
   information sets merge, and the bots play badly in subtle ways.
 
-Required tests, generic and provided by `engine::testing` (§6): `no_leak` changes every
-card hidden from a seat and asserts that the seat's observation is unchanged; `perfect_recall`
-asserts that a seat's earlier observation can be recovered from its later one.
+Required tests, generic and provided by `engine::testing` (§6):
+- **No leaks (C4):** across many determinizations from seat *q*'s view, every other seat *r*'s
+  observation must change at least once. If it never does, *r*'s private cards are effectively fixed
+  by *q*'s observation, i.e. leaked (or `determinize` ignores the sampler). It's a statistical
+  check that catches gross leaks; subtle ones (e.g. leaking one bit of a card) still need
+  game-specific tests. Also: legal actions and `to_act` must be identical across determinizations,
+  because legality that depends on hidden cards is itself a leak.
+- **Perfect recall (C5):** along one hand, a seat's observations at its own decision points
+  are all distinct. Necessary, not sufficient; the stronger property ("the history can be recovered
+  from the observation") is enforced by the convention that observations carry the full public
+  history plus the seat's own actions.
 
 Observation should be compact (it's hashed constantly): card sets as `u64` bitmasks, action
 history as a `SmallVec` of `Action`.
@@ -209,8 +225,8 @@ construct the deal order, then apply the public action log to a fresh `new_hand`
 | C1 | `to_act` is Chance ⇒ outcomes are non-empty and probabilities sum to 1 | random walks, 10⁴ hands |
 | C2 | Every action from `legal_actions` passes `validate` | random walks |
 | C3 | Terminal ⇒ Σ payoffs == 0, and each seat's loss ≤ its starting stack | random walks |
-| C4 | No leaks (§4) | perturbation |
-| C5 | Perfect recall (§4) | random walks |
+| C4 | No leaks (§4) | determinization variability |
+| C5 | Perfect recall (§4), necessary condition | random walks |
 | C6 | Determinize round-trip (§5) | random walks |
 | C7 | Replay determinism: same setup + log ⇒ identical State and payoffs | random walks |
 | C8 | Termination: every hand ends in ≤ `max_steps` (game-declared) | random walks |
