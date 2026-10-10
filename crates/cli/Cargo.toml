@@ -19,5 +19,6 @@ clap = { workspace = true }
 engine = { path = "../engine" }
 games = { path = "../games" }
 rand = { workspace = true }
+ratatui = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
