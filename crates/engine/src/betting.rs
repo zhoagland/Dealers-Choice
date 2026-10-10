@@ -52,6 +52,8 @@ pub enum BetAction {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BetSize {
     MinRaise,
+    /// The largest legal raise (the cap in limit/spread games; all-in in no-limit).
+    MaxRaise,
     /// Raise by `num/den` of the pot after calling: 1/1 is a pot-sized raise.
     PotFraction(u32, u32),
     AllIn,
@@ -81,6 +83,9 @@ pub struct Betting {
     stacks: Vec<Chips>,
     /// Chips each seat has put in this hand, antes and blinds included.
     contributed: Vec<Chips>,
+    /// The part of `contributed` that was dead money (antes, dealer ante). Dead money goes to
+    /// the main pot for everyone; it must not create side-pot layers of its own.
+    dead: Vec<Chips>,
     /// Chips each seat has put in on the current street (live money only).
     street: Vec<Chips>,
     folded: u16,
@@ -115,6 +120,7 @@ impl Betting {
             min_bet,
             stacks: stacks.to_vec(),
             contributed: vec![Chips::ZERO; n],
+            dead: vec![Chips::ZERO; n],
             street: vec![Chips::ZERO; n],
             folded: 0,
             all_in: stacks
@@ -139,6 +145,7 @@ impl Betting {
     pub fn post_dead(&mut self, seat: Seat, amount: Chips) {
         let paid = self.take(seat, amount);
         self.contributed[seat.index()] += paid;
+        self.dead[seat.index()] += paid;
     }
 
     /// A live blind: counts as this seat's bet on the current street. Call after `start_street`.
@@ -363,6 +370,7 @@ impl Betting {
             for &size in sizes {
                 let raw = match size {
                     BetSize::MinRaise => lo,
+                    BetSize::MaxRaise => hi,
                     BetSize::AllIn => all_in.min(hi),
                     BetSize::PotFraction(num, den) => {
                         let pot_after_call = self.pot() + owed;
@@ -390,6 +398,21 @@ impl Betting {
         self.contributed.iter().copied().sum()
     }
 
+    /// Live money per seat (bets, calls, blinds): what side pots are layered from.
+    pub fn live_contributed(&self) -> Vec<Chips> {
+        self.contributed
+            .iter()
+            .zip(&self.dead)
+            .map(|(&c, &d)| c - d)
+            .collect()
+    }
+
+    /// Total dead money: added to the main pot.
+    pub fn dead_total(&self) -> Chips {
+        self.dead.iter().copied().sum()
+    }
+
+    /// Everything each seat put in, live and dead (what a seat loses if it wins nothing).
     pub fn contributed(&self) -> &[Chips] {
         &self.contributed
     }
