@@ -642,6 +642,75 @@ impl Game for Holdem {
     }
 }
 
+impl Holdem {
+    /// Build a spot for analysis (FR-EV-2): `hero` holds `hero_cards`, the board shows `board`,
+    /// and `bets` is every betting action so far, in order. Other seats get placeholder cards;
+    /// `determinize` resamples them (from ranges, if given), so the placeholders never matter.
+    ///
+    /// Errors if the description is inconsistent: a card used twice, a board that doesn't match
+    /// how far the betting went, an illegal bet, or a final state where it isn't the hero's turn.
+    pub fn spot_state(
+        &self,
+        setup: &HandSetup,
+        hero: Seat,
+        hero_cards: [Card; 2],
+        board: &[Card],
+        bets: &[Action],
+    ) -> Result<State, String> {
+        let known: CardSet = hero_cards.iter().chain(board).copied().collect();
+        if known.len() != 2 + board.len() {
+            return Err("a card appears twice in hero cards + board".into());
+        }
+        let mut placeholders = CardSet::FULL_DECK.difference(known).iter();
+        let mut hero_k = 0;
+        let mut deals: Vec<Card> = (0..2 * setup.num_seats as usize)
+            .map(|k| {
+                if Holdem::hole_seat(setup, k) == hero {
+                    hero_k += 1;
+                    hero_cards[hero_k - 1]
+                } else {
+                    placeholders.next().unwrap()
+                }
+            })
+            .collect();
+        deals.extend_from_slice(board);
+
+        let mut deals = deals.into_iter();
+        let mut bets = bets.iter().copied();
+        let mut state = self.new_hand(setup);
+        loop {
+            let a = match self.to_act(&state) {
+                ToAct::Terminal => return Err("the described hand is already over".into()),
+                ToAct::Chance => match deals.next() {
+                    Some(c) => Action::Deal(c),
+                    None => {
+                        return Err(
+                            "the betting reaches a street whose board cards weren't given".into(),
+                        );
+                    }
+                },
+                ToAct::Seat(_) => match bets.next() {
+                    Some(b) => b,
+                    None => break,
+                },
+            };
+            self.validate(&state, a)
+                .map_err(|e| format!("{}: {e}", self.describe_action(a)))?;
+            self.apply(&mut state, a);
+        }
+        if deals.next().is_some() {
+            return Err("more board cards than the betting has reached".into());
+        }
+        match self.to_act(&state) {
+            ToAct::Seat(p) if p == hero => Ok(state),
+            ToAct::Seat(p) => Err(format!(
+                "after those actions it's {p}'s turn, not the hero's ({hero})"
+            )),
+            _ => unreachable!(),
+        }
+    }
+}
+
 /// Read-only accessors for renderers and tests.
 impl State {
     pub fn board(&self) -> &[Card] {
@@ -818,6 +887,43 @@ mod tests {
             g.payoffs(&s),
             vec![Chips(0), Chips(0)],
             "royal on board: chop"
+        );
+    }
+
+    #[test]
+    fn spot_state_builds_and_checks_consistency() {
+        let g = game();
+        let setup = setup3();
+        let c = |s: &str| s.parse::<Card>().unwrap();
+        let board = [c("Qh"), c("7h"), c("2c")];
+        // Seat 0 opens to $3, seat 1 folds, seat 2 calls; flop; seat 2 checks → seat 0 (hero) to act.
+        let bets = [
+            Action::RaiseTo(Chips(300)),
+            Action::Fold,
+            Action::CheckCall,
+            Action::CheckCall,
+        ];
+        let s = g
+            .spot_state(&setup, Seat(0), [c("Ah"), c("Kh")], &board, &bets)
+            .unwrap();
+        let obs = g.observe(&s, Seat(0));
+        assert_eq!(obs.hole.as_slice(), &[c("Ah"), c("Kh")]);
+        assert_eq!(obs.board().as_slice(), &board);
+        // Inconsistent descriptions are rejected.
+        assert!(
+            g.spot_state(&setup, Seat(0), [c("Ah"), c("Ah")], &board, &bets)
+                .is_err(),
+            "dup card"
+        );
+        assert!(
+            g.spot_state(&setup, Seat(0), [c("Ah"), c("Kh")], &[], &bets)
+                .is_err(),
+            "missing board"
+        );
+        assert!(
+            g.spot_state(&setup, Seat(2), [c("Ah"), c("Kh")], &board, &bets)
+                .is_err(),
+            "not hero's turn"
         );
     }
 

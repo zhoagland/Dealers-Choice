@@ -7,6 +7,7 @@ pub mod ismcts;
 pub mod mccfr;
 pub mod policy;
 pub mod random;
+pub mod ranges;
 pub mod strategy;
 pub mod strength;
 
