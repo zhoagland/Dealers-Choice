@@ -188,6 +188,24 @@ House conventions that are engine-level, not per-game:
 - **FR-SM-3** Instrumentation: hands/s, decisions/s, encoded bytes/hand, per (game, bot config).
 - **FR-SM-4** Output tiers: aggregates (always), full hand histories (opt-in or sampled at rate *p*).
 
+### 5.6b Player analytics (M7)
+- Scope: **human players only.** Bot hands are never post-processed or stored for analytics, which keeps
+  storage small. Bot baselines in FR-PA-3 are computed on the fly when a report is built, not stored.
+- **FR-PA-1** Descriptive stats per player, game, and position, computed from stored hand
+  records: VPIP, PFR, 3-bet %, aggression factor, c-bet %, fold to c-bet, WTSD, W$SD. Defined via
+  `ActionClass` so they apply to any game. Each stat is shown with its sample size and a 95% CI.
+- **FR-PA-2** True range charts: because hand records are replayable from their seeds, the
+  player's hole cards are known for **every** hand, including folds. Show the actual range per
+  preflop/opening spot.
+- **FR-PA-3** EV leak report: aggregate coach `EV_loss ± SE` by spot (street × position × action
+  class × hand-strength bucket), rank by total EV lost, and compare frequencies with the default bot's in
+  the same spots. Only spots where the loss exceeds 2·SE are reported.
+- **FR-PA-4** Cross-game style summary (aggression, fold to pressure), labeled as indicative only:
+  stats don't transfer cleanly between games with different structures.
+- **FR-PA-5** *(post-v1)* Exploitative bots: weight determinization of a player's hidden cards by
+  their observed tendencies (opponent model), with capped deviation from the default strategy
+  so the bot stays hard to counter-exploit.
+
 ### 5.7 Storage (`storage` crate)
 - **FR-ST-1** App state (profiles, bankrolls, bot presets, saved sessions) in SQLite.
 - **FR-ST-2** Simulation output partitioned by game and run at `data/sim/game=<id>/run=<uuid>/`,
@@ -272,6 +290,8 @@ House conventions that are engine-level, not per-game:
 | M4 | Strength presets, coach (post-hand + live), spot analysis with ranges | Coach flags are stable across reruns with different seeds |
 | M5 | Follow the Queen driver | Plays house rules; written using only the "adding a game" guide (tests the guide) |
 | M6 | Storage + persistence (bankroll, sim output, blueprints) | Sessions survive restart; sim output queryable |
+| M7 | Player analytics (FR-PA-1…4) | Stats and leak report reproduce known values on synthetic players with planted leaks (e.g. a bot that always calls the river) |
+| M8 | NPI → sustainment handoff: CI (fmt, clippy, tests per PR; nightly release-mode exhaustive + benchmark tests), sustainment handbook (architecture map, run/debug/replay, versioning and invalidation rules, release checklist, known limits, prioritized backlog), adding-a-game guide | Owner can add a game, change rules, cut a release, and diagnose a CI failure using only the docs |
 
 ## 10. Assumptions (with sensitivity)
 
