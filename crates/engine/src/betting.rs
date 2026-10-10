@@ -147,6 +147,7 @@ impl Betting {
         self.contributed[seat.index()] += paid;
         self.street[seat.index()] += paid;
         self.current_bet = self.current_bet.max(self.street[seat.index()]);
+        self.normalize_needs();
     }
 
     /// Remove up to `amount` from a stack; marks all-in if it empties.
@@ -171,12 +172,25 @@ impl Betting {
         self.raises = 0;
         self.acted = 0;
         self.needs = self.can_act_mask();
-        // Betting is pointless with fewer than two seats able to put in chips, unless someone
-        // owes money (impossible at street start, since `street` was just reset).
-        if self.needs.count_ones() < 2 {
-            self.needs = 0;
-        }
+        self.normalize_needs();
         self.cursor = first;
+    }
+
+    /// Rules that remove pointless decisions, applied after every change:
+    /// - all-in and folded seats never act;
+    /// - once everyone else has folded, nobody acts;
+    /// - if only one seat can still put in chips, it acts only if it owes something (it must
+    ///   decide whether to call an all-in), never just to check against nobody.
+    fn normalize_needs(&mut self) {
+        let can_act = self.can_act_mask();
+        self.needs &= can_act;
+        if self.live_count() == 1 {
+            self.needs = 0;
+        } else if can_act.count_ones() == 1 {
+            let s = Seat(can_act.trailing_zeros() as u8);
+            let owes = self.street[s.index()] < self.current_bet;
+            self.needs = if owes { can_act } else { 0 };
+        }
     }
 
     /// Seats neither folded nor all-in.
@@ -328,21 +342,7 @@ impl Betting {
                 }
             }
         }
-        // A seat that just went all-in no longer acts; folded seats never do.
-        self.needs &= self.can_act_mask();
-        // If only one seat can still act and it owes nothing, nobody needs to act.
-        if self.needs.count_ones() == 1 {
-            let s = Seat(self.needs.trailing_zeros() as u8);
-            let owes = self.street[s.index()] < self.current_bet;
-            let only_actor = self.can_act_mask().count_ones() == 1;
-            if only_actor && !owes {
-                self.needs = 0;
-            }
-        }
-        // Everyone else folded: the hand is over, no more betting.
-        if self.live_count() == 1 {
-            self.needs = 0;
-        }
+        self.normalize_needs();
         self.cursor = seat.next(self.num_seats);
     }
 
@@ -535,6 +535,38 @@ mod tests {
         assert_eq!(b.to_act(), None);
         assert!(b.betting_finished());
         assert_eq!(b.live_count(), 1);
+    }
+
+    #[test]
+    fn lone_actor_must_answer_an_all_in_blind() {
+        // Heads-up: seat 0 (SB) has chips; seat 1's big blind is all-in for 80 > SB 50.
+        let mut b = Betting::new(NL, &[Chips(1_000), Chips(80)], Chips(100));
+        b.start_street(0, Seat(0));
+        b.post_blind(Seat(0), Chips(50));
+        b.post_blind(Seat(1), Chips(100));
+        assert_eq!(
+            b.to_act(),
+            Some(Seat(0)),
+            "SB must decide whether to call the all-in"
+        );
+        assert_eq!(b.options(Seat(0)).call, Chips(30));
+        assert_eq!(
+            b.options(Seat(0)).raise,
+            None,
+            "nobody left to raise against"
+        );
+        b.apply(Seat(0), BetAction::CheckCall);
+        assert_eq!(b.to_act(), None);
+    }
+
+    #[test]
+    fn lone_actor_owing_nothing_does_not_act() {
+        // Seat 1 is all-in for less than the SB: seat 0 owes nothing, so no decision.
+        let mut b = Betting::new(NL, &[Chips(1_000), Chips(30)], Chips(100));
+        b.start_street(0, Seat(0));
+        b.post_blind(Seat(0), Chips(50));
+        b.post_blind(Seat(1), Chips(100));
+        assert_eq!(b.to_act(), None);
     }
 
     #[test]
