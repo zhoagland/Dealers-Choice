@@ -172,10 +172,12 @@ Sessions are generic over `G: Game` for one game at a time. Switching games = th
 
 ## 7. RNG and seeds (`rng.rs`)
 
-`DetRng = ChaCha8Rng`. Hand *i* of a run uses `ChaCha8Rng::seed_from_u64(run_seed)` with
-`set_stream(i)`, so the streams are independent and order-independent. That's what makes
-`rayon` sims reproducible no matter which thread runs which hand. Bots get their own stream
-per (hand, seat), so a bot's randomness doesn't shift the deal.
+`DetRng = ChaCha8Rng`. `derive_rng(run_seed, hand_index, stream)` writes the three values into
+the 32-byte ChaCha key. Distinct inputs → distinct keys → unrelated streams. Hand *i* gets the
+same randomness whichever thread plays it, which is what makes `rayon` sims reproducible.
+`Stream::{Deal, Seat(n), Custom(n)}` separates consumers, so a bot drawing more random numbers
+can't change the deal. A golden-value test pins the output: a `rand`/`rand_chacha` upgrade that
+changes the stream fails CI instead of silently breaking saved seeds.
 
 ## 8. Testing (`testing/`)
 
