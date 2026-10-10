@@ -75,6 +75,7 @@ pub struct GameMeta {
     pub display_name: &'static str,
     pub seats: RangeInclusive<u8>,
     pub stake_model: StakeModel,          // Bankroll | TableStake(Chips)
+    pub length: GameLength,               // SingleHand (default) | Orbit; UntilDone needs API v2
     pub rules_ref: &'static str,          // "Poker Bible §Follow the Queen"
 }
 ```
@@ -244,9 +245,11 @@ server boundary. Everything downstream is generic and monomorphized.
 
 ## 9. Things deliberately not in the API
 
-- **Session/orbit logic.** The engine's `Session` drives hands and calls `new_hand` with the
-  right `HandSetup`. Multi-hand games (Guts legs) will need a `carry: Self::Carry` associated
-  type. Deferred until a driver needs it (YAGNI). That would be `API_VERSION` 2.
+- **Session logic.** The engine's `Session` drives hands according to `meta.length` and calls
+  `new_hand` with the right `HandSetup`. `SingleHand` and `Orbit` games are independent hands.
+  `UntilDone` games (Guts Leg legs, 3-2-1 Drop carry-over pot) need state passed between hands:
+  a `type Carry` produced at terminal and fed into the next `new_hand`, plus `fn game_over(&Carry) -> bool`.
+  Deferred until the first such driver (YAGNI). That would be `API_VERSION` 2.
 - **Rendering.** The CLI and web layers render `Observation` via a separate
   `trait Render<G: Game>` in their own crates.
 - **Bot hints.** No `heuristic_value` hook. Bots must work from the API alone (FR-GD-6).

@@ -61,7 +61,7 @@ pub enum Action {
 
 ## No-Limit Texas Hold'em (M2)
 
-**Config** (defaults from the Bible): SB 50¢, BB 100¢, stake model `TableStake(2000¢)`, dealer ante
+**Length**: `Orbit` (Bible: "repeats for one revolution of the table"). **Config** (defaults from the Bible): SB 50¢, BB 100¢, stake model `TableStake(2000¢)` for the whole orbit, dealer ante
 200¢ on the first hand of the game, posted by the chooser. Bot bet menu: `[MinRaise, Pot(1/3), Pot(2/3), Pot(1), AllIn]`.
 
 **State**
@@ -107,7 +107,7 @@ heads-up blind order (button = SB, acts first preflop and last postflop); split 
 
 ## Follow the Queen (M5)
 
-**Config**: dealer ante 200¢ only (no other antes or bring-in); `SpreadLimit { min_inc: 50,
+**Length**: `SingleHand`. **Config**: dealer ante 200¢ only (no other antes or bring-in); `SpreadLimit { min_inc: 50,
 max_inc: 200, step: 50, max_raises: 4 }`; stake model `Bankroll`; hi/lo with declaration.
 
 **Deal sequence**: 2 down → 3rd street up → bet → 4th up → bet → 5th up → bet → 6th up → bet →

@@ -27,7 +27,7 @@ engine/src/
 ├── pot.rs         contributions, side pots, hi/lo split, odd chip
 ├── game.rs        Game trait + core types (see docs/api/game-driver.md)
 ├── replay.rs      build State from setup + action log
-├── session.rs     Dealer's Choice orbit flow, stake model, rebuys
+├── session.rs     Dealer's Choice game flow (GameLength), stake model, rebuys
 ├── rng.rs         DetRng, seed derivation
 └── testing/       conformance::<G>(), random walks, invariant checks
 ```
@@ -155,10 +155,11 @@ test: Σ payoffs = 0.
 Pure logic, no I/O. `storage` persists its events.
 
 ```rust
-pub struct Session { seats: Vec<SeatInfo>, chooser: Seat, button: Seat, hands_left_in_orbit: u8, … }
+pub struct Session { seats: Vec<SeatInfo>, chooser: Seat, button: Seat, hands_left_in_game: u8, … }
 pub enum SessionEvent { GameChosen{..}, BuyIn{..}, HandComplete{record, deltas}, Rebuy{..}, CashOut{..}, SitOut{..} }
 ```
-- Orbit = `num_seats` hands starting with `button = chooser`; then `chooser += 1` (FR-SS-4).
+- Game start: `button = chooser`, `hands_left_in_game = 1` for `SingleHand`, `num_seats` for `Orbit`
+  (button advances each hand). At game end, `chooser += 1` and the next game starts (FR-SS-4).
 - `StakeModel::TableStake(x)`: buy-in at game start, cash-out at game end. `Bankroll`:
   stack = bankroll.
 - Rebuy only when the table stack is 0 (FR-SS-3). Bots: infinite bankroll, automatic rebuy.

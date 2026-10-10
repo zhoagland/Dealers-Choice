@@ -74,8 +74,14 @@ House conventions that are engine-level, not per-game:
   Flush > Straight > Three of a Kind > Two Pair > One Pair > High Card. Note that Royal Flush
   is above Five of a Kind; this differs from standard wild-card rules.
 - **Low ranking:** ace-to-six (ace low; straights and flushes count against). Best: 6-4-3-2-A.
-- **A "game"** lasts one orbit of the dealer button, starting with the chooser. The chooser pays a
-  dealer ante ($2.00). Then the player to the chooser's left picks the next game.
+- **A "game" is one hand unless its rules say otherwise.** The chooser deals and pays a
+  dealer ante ($2.00) once per game. Then the player to the chooser's left picks the next game.
+  Length is declared per game (`GameLength`):
+  - `SingleHand`: the default (FTQ, most games).
+  - `Orbit`: one trip of the button starting with the chooser (Hold'em; the "stun" variants of 3-2-1 Drop
+    and Iron Cross).
+  - `UntilDone`: repeat hands until a game-defined condition, carrying state between hands (Guts Leg:
+    first to 2 legs; 3-2-1 Drop: the pot carries over until won). **Not in v1**: needs API v2 `Carry`.
 - **Showdown:** the last aggressor shows first; the others may show or muck. Mucked cards are never
   revealed to other players.
 - **"Both" declaration:** the player must win high *and* low outright. Any chop is a loss of both,
@@ -128,8 +134,9 @@ House conventions that are engine-level, not per-game:
   as many times as their bankroll allows. Humans can opt out (sit out the rest of the game).
   Bots have an **infinite bankroll** and rebuy automatically, so their result is tracked as
   net won/lost. Rebuy events are logged.
-- **FR-SS-4** Dealer's Choice session flow: chooser selects a game → game runs one orbit →
-  the next seat chooses. Bots that choose pick from a configurable list.
+- **FR-SS-4** Dealer's Choice session flow: chooser selects a game → game runs for its
+  `GameLength` (one hand by default; one orbit for Hold'em) → the seat to the chooser's left chooses.
+  `TableStake` buy-in and cash-out wrap the whole game, not each hand. Bots that choose pick from a configurable list.
 - **FR-SS-5** 2–9 seats.
 
 ### 5.4 Bots (`bots` crate)
@@ -252,7 +259,7 @@ House conventions that are engine-level, not per-game:
 |---|---|---|
 | M0 | Docs: this PRD, tech plans per crate, game-driver API contract, "adding a game" guide | Reviewed and approved |
 | M1 | `engine` core + Kuhn driver + random bot + MCCFR + best-response | NFR-2 Kuhn passes |
-| M2 | High/Low evaluators, pot manager, Hold'em driver, ISMCTS, CLI play | NFR-2 evaluator and chip-conservation tests pass; human can play a full Dealer's Choice orbit |
+| M2 | High/Low evaluators, pot manager, Hold'em driver, ISMCTS, CLI play | NFR-2 evaluator and chip-conservation tests pass; human can play a Dealer's Choice session spanning a single-hand game and a full Hold'em orbit |
 | M3 | `sim` crate + instrumentation | Measured hands/s and bytes/hand per game and bot; storage format decided (FR-ST-2) |
 | M4 | Strength presets, coach (post-hand + live), spot analysis with ranges | Coach flags are stable across reruns with different seeds |
 | M5 | Follow the Queen driver | Plays house rules; written using only the "adding a game" guide (tests the guide) |
@@ -294,4 +301,5 @@ House conventions that are engine-level, not per-game:
 - **Exploitability:** how much a best-responding opponent wins against a strategy. 0 means Nash.
 - **Blueprint:** a precomputed (MCCFR) strategy table loaded at play time.
 - **bb/100:** big blinds won per 100 hands, the standard win-rate unit.
-- **Orbit:** one full trip of the dealer button around the table. In this engine it is the length of one "game".
+- **Orbit:** one full trip of the dealer button around the table. The length of an `Orbit` game such as Hold'em.
+- **Game:** what the chooser picks. One hand by default; see `GameLength` (§4).
