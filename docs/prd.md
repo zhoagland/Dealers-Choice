@@ -156,6 +156,14 @@ House conventions that are engine-level, not per-game:
   weaker. Strength levels map to `(τ, search budget)` presets. τ is in EV units, so a
   given level loses roughly the same EV per decision in every game.
 - **FR-BT-6** **Style** settings (aggression bias, bluff frequency bias) are separate from strength.
+- **FR-BT-8** *(post-v1)* **External policy adapter.** A `Policy` backed by an out-of-process
+  decision model, first target **Jev** (TypeSafe AI's "System One" model: structured state in, typed
+  calibrated probabilities out; see https://typesafe.ai/blog/introducing-system-one-models-and-jev).
+  Requirements: (a) the request is the seat's serialized `Observation` plus the legal action list, and
+  the response is a probability per legal action; (b) the engine samples from those probabilities with its own
+  `DetRng`, and responses are cached by `(model id, observation hash)`, so sims and replays stay
+  deterministic (NFR-1); (c) concurrency, timeout, and fallback-policy settings; (d) per-run cost
+  and latency metrics. Also enables bots written in other languages (JSON over stdin/stdout).
 - **FR-BT-7** Bet sizing abstraction for bots: {min-raise, ⅓ pot, ⅔ pot, pot, all-in}, filtered
   by the betting structure. Off-menu human bets are mapped to the nearest abstract size for
   tree purposes and translated back exactly for chip accounting.

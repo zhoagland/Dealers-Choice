@@ -175,7 +175,28 @@ Built into a hero `Observation` by replaying the actions with placeholder oppone
 `observe(hero)`. The placeholders don't matter because `determinize` resamples them from the ranges.
 Output: the FR-EV-1 table.
 
-## 6. Coach (FR-EV-3…5)
+## 6. External policies (FR-BT-8, post-v1)
+
+```rust
+pub struct ExternalPolicy<T: Transport> { transport: T, cache: ResponseCache, fallback: Box<dyn …>, … }
+pub trait Transport { fn decide(&mut self, req: &DecisionRequest) -> Result<Vec<f64>, TransportError>; }
+// impls: HttpJev (vendor API), StdioJsonLines (any local program), Mock (tests)
+```
+- `DecisionRequest = { model, game_id, game_version, observation (serde JSON), legal: [action JSON] }`.
+  The legal moves form a closed set, which matches Jev's "typed outcomes defined up front" model.
+- **Determinism:** the response is a distribution. Sample it with the seat's `DetRng` stream. The cache key is
+  `(model, blake3(observation JSON))`. A sim re-run with a warm cache makes zero network calls, giving
+  identical results and $0.
+- **Throughput:** this is latency-bound, not CPU-bound. Running hands as `rayon` tasks blocked on I/O wastes
+  threads, so the external runner uses an async pool with N concurrent in-flight hands (N set
+  per run, to respect rate limits). This is a separate sim mode; the CPU path stays sync.
+- **Failure:** on timeout or error → `fallback` policy (default: ISMCTS preset 3). Logged per decision
+  so results are never silently contaminated.
+- **Evaluation:** an external policy has no Q values, so strength and coach don't apply to it. It's
+  measured like any bot: bb/100 vs ISMCTS presets with duplicate deals, plus Kuhn exploitability
+  (exact, cheap: ~12 infosets).
+
+## 7. Coach (FR-EV-3…5)
 
 - **Post-hand:** when a hand ends, the hand record (`engine::replay` format) goes to a background worker
   (`std::thread` + `mpsc`). For each human decision: replay to that point, `observe(human)`,
