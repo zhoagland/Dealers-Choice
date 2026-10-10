@@ -338,7 +338,12 @@ impl Game for Leduc {
         match a {
             Action::Deal(_) => ActionClass::Chance,
             Action::Fold => ActionClass::Fold,
-            Action::CheckCall => ActionClass::CheckOrCall,
+            Action::CheckCall => {
+                let facing = s.rounds[s.round()].last() == Some(&Action::Raise);
+                ActionClass::CheckOrCall {
+                    owed: Chips(if facing { BET_SIZE[s.round()] } else { 0 }),
+                }
+            }
             Action::Raise => {
                 // Total this player will have in after the raise.
                 let order = s.rounds[s.round()].len() % 2;
@@ -350,6 +355,10 @@ impl Game for Leduc {
 
     fn eval_unit(&self) -> Chips {
         Chips(1)
+    }
+
+    fn private_cards(&self, s: &State, seat: Seat) -> engine::CardVec {
+        s.cards.get(s.order_of(seat)).copied().into_iter().collect()
     }
 }
 

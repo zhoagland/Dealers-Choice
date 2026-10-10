@@ -10,6 +10,7 @@ mod player;
 mod settings;
 mod simulate;
 mod spot;
+mod stats;
 mod tools;
 
 use std::path::PathBuf;
@@ -42,6 +43,8 @@ enum Command {
     Player(player::PlayerCmd),
     /// Play a Dealer's Choice session against bots.
     Play(settings::PlayArgs),
+    /// Your stats, range chart, and EV leaks from stored hands.
+    Stats(stats::StatsArgs),
     /// Train an MCCFR strategy (small games) and report its exploitability.
     Train(tools::TrainArgs),
     /// Measure a bot's exploitability (Kuhn / Leduc only).
@@ -63,6 +66,7 @@ fn main() {
         Command::Config => config_tui::run(profiles.clone()),
         Command::Player(cmd) => player::run(cmd, &root),
         Command::Play(args) => play::run(args, &root, &profiles),
+        Command::Stats(args) => stats::run(args, &root),
         Command::Train(args) => tools::train(args, &root),
         Command::Exploit(args) => tools::exploit(args),
         Command::Spot(args) => spot::run(args),
