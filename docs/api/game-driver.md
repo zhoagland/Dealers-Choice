@@ -266,8 +266,11 @@ server boundary. Everything downstream is generic and monomorphized.
   `UntilDone` games (Guts Leg legs, 3-2-1 Drop carry-over pot) need state passed between hands:
   a `type Carry` produced at terminal and fed into the next `new_hand`, plus `fn game_over(&Carry) -> bool`.
   Deferred until the first such driver (YAGNI). That would be `API_VERSION` 2.
-- **Rendering.** The CLI and web layers render `Observation` via a separate
-  `trait Render<G: Game>` in their own crates.
+- **Rendering.** *Changed during implementation:* the text hooks `describe_observation`,
+  `describe_action`, `parse_action` are default methods on `Game` (defaults: `Debug`, none).
+  A separate `Render<G>` trait in the CLI would need its own per-game registry, because
+  `games::registry` only provides `G: Game`. A web UI should render from the serialized
+  `Observation` instead.
 - **Bot hints.** No `heuristic_value` hook. Bots must work from the API alone (FR-GD-6).
   `classify` is the only semantic hint. It's enough for a "check/call down" rollout policy
   (pick a `CheckOrCall` action, otherwise the first legal action) and for aggression biases.

@@ -303,6 +303,28 @@ pub trait Game: Send + Sync + Sized + 'static {
 
     /// Value unit for EV display and bot temperature: the big blind or the ante.
     fn eval_unit(&self) -> Chips;
+
+    // ----- Text interface (optional; used by the CLI) ----------------------------------------
+    //
+    // These live on the trait (with defaults) rather than in the CLI because the registry only
+    // hands out `G: Game`; a separate rendering trait would need a second per-game registry.
+
+    /// Human-readable view of what a seat sees. Default: `Debug`.
+    fn describe_observation(&self, obs: &Self::Observation) -> String {
+        format!("{obs:#?}")
+    }
+
+    /// Human-readable action. Default: `Debug`.
+    fn describe_action(&self, a: Self::Action) -> String {
+        format!("{a:?}")
+    }
+
+    /// Parse free-form human input (e.g. `"r 6.50"`) into an action; `legal` is the bot menu
+    /// for context. Return `None` if the text isn't understood. Default: understands nothing,
+    /// so humans pick from the numbered menu.
+    fn parse_action(&self, _input: &str, _legal: &[Self::Action]) -> Option<Self::Action> {
+        None
+    }
 }
 
 /// Pick from `(item, probability)` pairs. Probabilities need not be normalized.

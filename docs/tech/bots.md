@@ -204,5 +204,11 @@ pub trait Transport { fn decide(&mut self, req: &DecisionRequest) -> Result<Vec<
   then report `EV_loss = q_best − q_chosen`, `se = sqrt(se_best² + se_chosen²)`. Flag if
   `EV_loss > 2·se`. The result is a table printed after the hand (or when ready, if the next hand has started).
 - **Live hints:** the same evaluation, run before prompting the human. Toggle `:hints on|off` in the CLI.
+- **Implemented v1 deviation:** the post-hand review runs synchronously after the hand
+  (deterministic playout budget, `--review-playouts`), not on a background thread. Moving it off
+  the critical path is backlog.
+- **Observed bias (2026-10-10 smoke test):** ISMCTS opponent nodes over-fold to aggression,
+  so the coach over-rewards bluffing (e.g. "raise 9-high" scored about 12 bb better than calling).
+  Fix candidates: a better rollout policy, opponent-model-weighted determinization (FR-PA-5).
 - **Opponent model caveat (OQ-7):** the evaluation assumes opponents play like MO-ISMCTS does. The
   coach says "against this bot's model," not "GTO."

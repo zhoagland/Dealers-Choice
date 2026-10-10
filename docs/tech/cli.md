@@ -25,8 +25,8 @@ Session<G>  ──► hand loop ──► to_act():
                                Terminal    → payoffs → ledger → coach (background)
 ```
 
-- **Rendering:** `trait Render<G: Game> { fn render(&self, obs: &G::Observation) -> String; }`
-  implemented per game in `cli`. Text table, card glyphs, pot, to-call, legal actions.
+- **Rendering:** via the `Game` text hooks (`describe_observation`, `describe_action`,
+  `parse_action`; see the API doc §9). Humans pick a numbered menu item or type `f` / `c` / `r 6.50`.
 - **Input grammar:** `f`, `c` (check/call), `r 6.50` (raise to), `b 2` (bet), `h`/`l`/`hl`
   (declare), meta commands `:hints on|off`, `:review`, `:quit`. Off-menu amounts are allowed;
   `validate` gives the error message.
