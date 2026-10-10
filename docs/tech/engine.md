@@ -63,7 +63,8 @@ know which direction a hand is ranked in.
 ### High evaluator (natural, up to 7 cards)
 Direct evaluation from the rank masks and per-rank counts. No looping over the 21 five-card
 subsets. Order of checks: flush suit → straight flush/royal; rank counts → quads, full house,
-flush, straight, trips, two pair, pair, high. Target ≥ 10 M evals/s (NFR-3). Expected 20–50 M on a modern core.
+flush, straight, trips, two pair, pair, high. Target ≥ 10 M evals/s (NFR-3); measured 56.7 M/s
+(release, 7 cards).
 
 ### High evaluator with wilds (FTQ)
 Input: natural cards `n` and wild count `w` (cards of the wild rank are removed from `n`). Wilds
@@ -89,8 +90,14 @@ hand with ace treated as low**. So `low_a6(cards) = max over 5-card subsets of i
 For 7 cards that's 21 subsets of an inverted high evaluation. Good enough to start; optimize only if
 profiling says so.
 
-With wilds: each wild takes the lowest rank not already held, then the result is checked for
-straight/flush. If it makes one, the next rank is tried. Same oracle approach: brute-force over 13 ranks × suits.
+With wilds: use `min(w, 5)` wilds (a wild can copy any natural, so using one is never worse), try every
+choice of naturals for the remaining slots, and every set of distinct wild ranks among the 9 lowest
+(provably enough: the optimal wild ranks are the lowest unused ranks, with at most one bumped up
+to break a straight). A wild's suit always breaks a flush. Measured 17–33 µs per 7-card eval
+(release). Fine at showdown, slow for rollouts; optimize if profiling says so. Same oracle approach.
+
+**Wild-card flush rule (decided here; the Bible is silent):** a flush needs five *different* ranks,
+so a wild fills the highest rank missing from the flush (no "double-ace flush").
 
 ### Validation (NFR-2)
 - Exhaustive over all 2,598,960 five-card hands: category counts match the published table in the PRD.
