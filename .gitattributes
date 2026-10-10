@@ -1,0 +1,12 @@
+# Store text files with LF in the repository; check them out with the platform's native
+# endings. Stops the "LF will be replaced by CRLF" noise and keeps diffs clean.
+* text=auto
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.sql text eol=lf
+*.yml text eol=lf
+# Binary assets
+*.png binary
+*.jpg binary
+*.pdf binary

@@ -2,7 +2,7 @@
 
 | Field   | Value                         |
 |---------|-------------------------------|
-| Status  | Approved v0.1 (2026-10-10)    |
+| Status  | Approved v0.1 (2026-10-10); M0–M8 implemented, see `ChangeLog.md` |
 | Date    | 2026-10-10                    |
 | Owner   | Zachary Hoagland              |
 | Rules source of truth | `Rules/Poker Bible.typ` |

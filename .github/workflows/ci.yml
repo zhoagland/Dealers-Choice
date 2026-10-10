@@ -1,0 +1,65 @@
+# CI for Dealers Choice. See docs/dev/handbook.md §6 for what each job guards and how to
+# diagnose failures.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 7 * * *" # nightly, 07:00 UTC
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    # Both OSes: determinism (NFR-1) must hold across platforms, and bundled SQLite/zstd
+    # must build on each.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  nightly:
+    # Slow, release-mode checks: the exhaustive 7-card evaluator test (133,784,560 hands),
+    # throughput benchmarks, and the data-rate table. Runs on schedule or by hand.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --release -- --ignored --nocapture
+      - run: cargo run --release -p cli --bin dc -- bench-sim --deals 2000 | tee bench.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ github.run_id }}
+          path: bench.md
