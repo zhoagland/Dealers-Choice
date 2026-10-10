@@ -13,7 +13,6 @@
 
 use std::time::Duration;
 
-use clap::Args;
 use rand::Rng;
 use rand::seq::IndexedRandom;
 
@@ -26,51 +25,11 @@ use engine::session::{SeatInfo, SeatKind, SessionEvent, Table};
 use engine::{Chips, Game, Seat, StakeModel};
 use games::registry::{GAME_IDS, GameVisitor, with_game};
 use sim::encoding::{HandRecord, encode};
-use storage::{DataRoot, Db, LedgerKind, StoredHand};
+use storage::{DataRoot, Db, LedgerKind, Note, ProfileKind, ProfileStore, StoredHand};
 
 use crate::CliResult;
 use crate::human::{HumanPolicy, print_review, read_line};
-
-#[derive(Args)]
-pub struct PlayArgs {
-    /// Your player name (bankroll and history are kept per name).
-    #[arg(long, default_value = "you")]
-    pub player: String,
-    /// Opening bankroll in dollars, used only when the player is new.
-    #[arg(long, default_value_t = 100.0)]
-    pub bankroll: f64,
-    /// Don't read or write the database: an ephemeral session.
-    #[arg(long)]
-    pub no_save: bool,
-    /// Bot strength levels (1-10), one per bot seat, e.g. `7,5,3`.
-    #[arg(long, value_delimiter = ',', default_value = "7,5,3")]
-    pub bots: Vec<u8>,
-    /// Always play this game instead of rotating dealer's choice.
-    #[arg(long)]
-    pub game: Option<String>,
-    /// Games bots may choose from.
-    #[arg(long, value_delimiter = ',', default_value = "holdem_nl,ftq")]
-    pub pool: Vec<String>,
-    /// Show live hints (ranked actions with EV) before each of your decisions.
-    #[arg(long)]
-    pub hints: bool,
-    /// Skip the post-hand coach review.
-    #[arg(long)]
-    pub no_review: bool,
-    /// Coach review playouts per action (deterministic).
-    #[arg(long, default_value_t = 15_000)]
-    pub review_playouts: u32,
-    /// Session seed (random if omitted). The same seed and the same inputs replay the session.
-    #[arg(long)]
-    pub seed: Option<u64>,
-    /// Stop after this many games.
-    #[arg(long, default_value_t = 1_000)]
-    pub max_games: u32,
-    /// Most milliseconds a bot may think per decision. Bots use one core, only on their own
-    /// turn; nothing runs while you're deciding.
-    #[arg(long, default_value_t = 500)]
-    pub think_ms: u64,
-}
+use crate::settings::{PlayArgs, PlayProfile};
 
 /// The database connection plus the ids this session writes under.
 struct Persist {
@@ -110,8 +69,13 @@ impl Persist {
     }
 }
 
-pub fn run(args: PlayArgs, root: &DataRoot) -> CliResult {
-    for id in args.pool.iter().chain(args.game.iter()) {
+pub fn run(args: PlayArgs, root: &DataRoot, profiles: &ProfileStore) -> CliResult {
+    let base = match &args.profile {
+        Some(name) => profiles.load::<PlayProfile>(ProfileKind::Play, name)?,
+        None => PlayProfile::default(),
+    };
+    let s = args.apply(base);
+    for id in s.pool.iter().chain(Some(&s.game).filter(|g| !g.is_empty())) {
         if !GAME_IDS.contains(&id.as_str()) {
             return Err(format!("unknown game {id:?}; see `dc games`"));
         }
@@ -120,17 +84,17 @@ pub fn run(args: PlayArgs, root: &DataRoot) -> CliResult {
     println!("Session seed {seed}  (rerun with --seed {seed} to replay)");
 
     let (bankroll, mut persist) = if args.no_save {
-        (Chips::dollars(args.bankroll), None)
+        (Chips::dollars(s.bankroll), None)
     } else {
         let mut db = Db::open(&root.db()).map_err(|e| e.to_string())?;
         let player_id = db
-            .player(&args.player, Chips::dollars(args.bankroll))
+            .player(&s.player, Chips::dollars(s.bankroll))
             .map_err(|e| e.to_string())?;
         let session_id = db.start_session(seed).map_err(|e| e.to_string())?;
         let bankroll = db.bankroll(player_id).map_err(|e| e.to_string())?;
         println!(
             "Player {:?}: bankroll {bankroll}  (saved in {})",
-            args.player,
+            s.player,
             root.db().display()
         );
         (
@@ -145,18 +109,18 @@ pub fn run(args: PlayArgs, root: &DataRoot) -> CliResult {
     if bankroll <= Chips::ZERO {
         return Err(format!(
             "{}'s bankroll is {bankroll}; deposit with `dc player deposit`",
-            args.player
+            s.player
         ));
     }
 
     let mut seats = vec![SeatInfo {
-        name: args.player.clone(),
+        name: s.player.clone(),
         kind: SeatKind::Human,
         bankroll: Some(bankroll),
         stack: Chips::ZERO,
         sitting_out: false,
     }];
-    for (i, &level) in args.bots.iter().enumerate() {
+    for (i, &level) in s.bots.iter().enumerate() {
         seats.push(SeatInfo {
             name: format!("bot{}:{}", i + 1, level.clamp(1, 10)),
             kind: SeatKind::Bot,
@@ -169,11 +133,11 @@ pub fn run(args: PlayArgs, root: &DataRoot) -> CliResult {
     let mut chooser_rng = derive_rng(seed, 0, Stream::Custom(1));
     let mut hand_counter = 0u64;
 
-    for _ in 0..args.max_games {
-        let id = choose_game(&table, &args, &mut chooser_rng)?;
+    for _ in 0..s.max_games {
+        let id = choose_game(&table, &s, &mut chooser_rng)?;
         let visitor = PlayOneGame {
             table: &mut table,
-            args: &args,
+            settings: &s,
             seed,
             hand_counter: &mut hand_counter,
             persist: persist.as_mut(),
@@ -199,9 +163,9 @@ pub fn run(args: PlayArgs, root: &DataRoot) -> CliResult {
 }
 
 /// The chooser picks the next game: the human from a menu, bots at random from the pool.
-fn choose_game(table: &Table, args: &PlayArgs, rng: &mut engine::DetRng) -> Result<String, String> {
-    if let Some(id) = &args.game {
-        return Ok(id.clone());
+fn choose_game(table: &Table, s: &PlayProfile, rng: &mut engine::DetRng) -> Result<String, String> {
+    if !s.game.is_empty() {
+        return Ok(s.game.clone());
     }
     let n = table.seats.len() as u8;
     let fits = |id: &str| {
@@ -228,7 +192,7 @@ fn choose_game(table: &Table, args: &PlayArgs, rng: &mut engine::DetRng) -> Resu
             }
         }
     }
-    let pool: Vec<&String> = args.pool.iter().filter(|id| fits(id)).collect();
+    let pool: Vec<&String> = s.pool.iter().filter(|id| fits(id)).collect();
     let id = pool
         .choose(rng)
         .ok_or("no game in --pool fits this many seats")?;
@@ -247,7 +211,7 @@ impl GameVisitor<std::ops::RangeInclusive<u8>> for SeatRange {
 /// Visitor that plays one complete game (all of its hands).
 struct PlayOneGame<'a> {
     table: &'a mut Table,
-    args: &'a PlayArgs,
+    settings: &'a PlayProfile,
     seed: u64,
     hand_counter: &'a mut u64,
     persist: Option<&'a mut Persist>,
@@ -279,7 +243,7 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
                     let info = &table.seats[t];
                     match info.kind {
                         SeatKind::Human => Box::new(HumanPolicy::<G>::new(
-                            self.args.hints,
+                            self.settings.hints,
                             Budget::Playouts(5_000),
                         )),
                         SeatKind::Bot => {
@@ -292,8 +256,9 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
                             let mut bot = IsmctsBot::<G>::preset(level, true);
                             // Strong presets would think longer than the table's cap (PRD A6, --think-ms).
                             if let Budget::Time(t) = bot.strength.budget {
-                                bot.strength.budget =
-                                    Budget::Time(t.min(Duration::from_millis(self.args.think_ms)));
+                                bot.strength.budget = Budget::Time(
+                                    t.min(Duration::from_millis(self.settings.think_ms)),
+                                );
                             }
                             Box::new(bot)
                         }
@@ -329,7 +294,7 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
                 );
             }
             let mut reviews: Vec<DecisionReview<G::Action>> = Vec::new();
-            if let (Some(h), false) = (human_seat, self.args.no_review) {
+            if let (Some(h), true) = (human_seat, self.settings.review) {
                 let mut search = Ismcts::<G>::new(IsmctsConfig::default());
                 let mut rng = rng_from_seed(self.seed ^ hand);
                 reviews = review_hand(
@@ -338,7 +303,7 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
                     &result.actions,
                     h,
                     &mut search,
-                    Budget::Playouts(self.args.review_playouts),
+                    Budget::Playouts(self.settings.review_playouts),
                     &mut rng,
                 );
                 print_review(&game, &reviews);
@@ -363,7 +328,12 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
                     record: &record,
                     notes: reviews
                         .iter()
-                        .map(|r| (r.step, r.ev_loss, r.se, r.flagged))
+                        .map(|r| Note {
+                            decision_idx: r.step,
+                            ev_loss: r.ev_loss,
+                            se: r.se,
+                            flagged: r.flagged,
+                        })
                         .collect(),
                 };
                 p.db.store_hand(&stored).map_err(|e| e.to_string())?;
