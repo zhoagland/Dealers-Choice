@@ -138,3 +138,55 @@ fn kuhn_exploitability_baseline() {
     println!("Kuhn exploitability: ISMCTS {e:.4}, uniform {uniform:.4}");
     assert!(e < uniform, "ISMCTS {e} vs uniform {uniform}");
 }
+
+/// Hold'em sanity: with the nuts on the river facing a bet, calling must beat folding.
+#[test]
+fn holdem_calls_with_the_nuts() {
+    use games::holdem::{Action, Config, Holdem};
+    let game = Holdem::new(Config::default());
+    let setup = HandSetup { first_hand_of_game: false, ..HandSetup::simple(2, Chips(2_000)) };
+    let d = |s: &str| s.split_whitespace().map(|c| Action::Deal(c.parse().unwrap())).collect::<Vec<_>>();
+    // Seat 1 gets As Ks (cards 1 and 3); board makes a royal flush for seat 1.
+    let mut log = d("As 2c Ks 7d");
+    log.extend([Action::CheckCall, Action::CheckCall]);
+    for (cards, acts) in [("Qs Js Ts", 2), ("3h", 2), ("4d", 0)] {
+        log.extend(d(cards));
+        log.extend(std::iter::repeat_n(Action::CheckCall, acts));
+    }
+    // River: seat 1 checks, seat 0 bets 300, back to seat 1.
+    log.extend([Action::CheckCall, Action::RaiseTo(Chips(300))]);
+    let s = replay(&game, &setup, &log).unwrap();
+    assert_eq!(game.to_act(&s), ToAct::Seat(Seat(1)));
+    let obs = game.observe(&s, Seat(1));
+    let mut legal = Vec::new();
+    game.legal_actions(&s, &mut legal);
+    let mut search = Ismcts::<Holdem>::new(IsmctsConfig::default());
+    let v = search.evaluate(&game, &obs, &legal, Budget::Playouts(1_500), &mut rng_from_seed(5));
+    let q = |a: Action| v.iter().find(|x| x.action == a).unwrap().q;
+    assert!(q(Action::CheckCall) > q(Action::Fold), "{v:?}");
+    assert_ne!(v[0].action, Action::Fold);
+}
+
+/// NFR-3: ISMCTS playouts per 0.5 s in 6-handed Hold'em. Release mode only:
+/// `cargo test --release -p bots holdem_playout_rate -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn holdem_playout_rate() {
+    use games::holdem::{Config, Holdem};
+    let game = Holdem::new(Config::default());
+    let setup = HandSetup::simple(6, Chips(2_000));
+    let mut rng = rng_from_seed(1);
+    // Advance to the first decision.
+    let mut s = game.new_hand(&setup);
+    while game.to_act(&s) == ToAct::Chance {
+        let a = game.sample_chance(&s, &mut rng);
+        game.apply(&mut s, a);
+    }
+    let ToAct::Seat(p) = game.to_act(&s) else { unreachable!() };
+    let obs = game.observe(&s, p);
+    let mut legal = Vec::new();
+    game.legal_actions(&s, &mut legal);
+    let mut search = Ismcts::<Holdem>::new(IsmctsConfig::default());
+    search.best_action(&game, &obs, &legal, Budget::Time(std::time::Duration::from_millis(500)), &mut rng);
+    println!("6-max Hold'em preflop: {} playouts in 0.5 s (target ≥ 10,000)", search.last_playouts);
+}
