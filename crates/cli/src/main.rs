@@ -5,6 +5,7 @@
 
 mod human;
 mod play;
+mod simulate;
 mod tools;
 
 use clap::{Parser, Subcommand};
@@ -26,6 +27,10 @@ enum Command {
     Train(tools::TrainArgs),
     /// Measure a bot's exploitability (Kuhn / Leduc only).
     Exploit(tools::ExploitArgs),
+    /// Run a bot-vs-bot simulation.
+    Sim(simulate::SimArgs),
+    /// Measure throughput and data rate on fixed workloads.
+    BenchSim(simulate::BenchArgs),
 }
 
 fn main() {
@@ -35,6 +40,8 @@ fn main() {
         Command::Play(args) => play::run(args),
         Command::Train(args) => tools::train(args),
         Command::Exploit(args) => tools::exploit(args),
+        Command::Sim(args) => simulate::sim(args),
+        Command::BenchSim(args) => simulate::bench(args),
     };
     if let Err(e) = result {
         eprintln!("error: {e}");

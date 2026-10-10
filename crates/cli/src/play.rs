@@ -23,8 +23,6 @@ use games::registry::{GAME_IDS, GameVisitor, with_game};
 
 use crate::CliResult;
 
-/// Longest a bot may think per decision during play.
-const MAX_BOT_THINK: Duration = Duration::from_millis(500);
 use crate::human::{HumanPolicy, print_review, read_line};
 
 #[derive(Args)]
@@ -56,6 +54,10 @@ pub struct PlayArgs {
     /// Stop after this many games.
     #[arg(long, default_value_t = 1_000)]
     pub max_games: u32,
+    /// Most milliseconds a bot may think per decision. Bots use one core, only on their own
+    /// turn; nothing runs while you're deciding.
+    #[arg(long, default_value_t = 500)]
+    pub think_ms: u64,
 }
 
 pub fn run(args: PlayArgs) -> CliResult {
@@ -196,22 +198,22 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
                                 .and_then(|l| l.parse().ok())
                                 .unwrap_or(5);
                             let mut bot = IsmctsBot::<G>::preset(level, true);
-                            // Strong presets think longer than the table's ~0.5 s target (PRD A6).
+                            // Strong presets would think longer than the table's cap (PRD A6, --think-ms).
                             if let Budget::Time(t) = bot.strength.budget {
-                                bot.strength.budget = Budget::Time(t.min(MAX_BOT_THINK));
+                                bot.strength.budget =
+                                    Budget::Time(t.min(Duration::from_millis(self.args.think_ms)));
                             }
                             Box::new(bot)
                         }
                     }
                 })
                 .collect();
-            let mut seats: Vec<&mut dyn Policy<G>> =
-                policies
-                    .iter_mut()
-                    // `as` shortens the trait object's lifetime from 'static to this borrow; `&mut` is
-                    // invariant, so Rust won't do that implicitly when collecting into a Vec.
-                    .map(|p| p.as_mut() as &mut dyn Policy<G>)
-                    .collect();
+            let mut seats: Vec<&mut dyn Policy<G>> = policies
+                .iter_mut()
+                // `as` shortens the trait object's lifetime from 'static to this borrow; `&mut` is
+                // invariant, so Rust won't do that implicitly when collecting into a Vec.
+                .map(|p| p.as_mut() as &mut dyn Policy<G>)
+                .collect();
             let mut deal = derive_rng(self.seed, hand, Stream::Deal);
             let mut rngs: Vec<_> = (0..map.len())
                 .map(|i| derive_rng(self.seed, hand, Stream::Seat(i as u8)))
