@@ -8,7 +8,9 @@
 | [bots.md](bots.md) | `bots` | M1, M2, M4 | FR-BT-*, FR-EV-* |
 | [sim.md](sim.md) | `sim` | M3 | FR-SM-* |
 | [storage.md](storage.md) | `storage` | M3, M6 | FR-ST-* |
-| [cli.md](cli.md) | `cli` | M2, M4 | FR-UI-* |
+| [cli.md](cli.md) | `cli` | M2, M4, M6 | FR-UI-* |
+| [../dev/adding-a-game.md](../dev/adding-a-game.md) | `games` | M5 | FR-GD-6 |
+| [../dev/handbook.md](../dev/handbook.md) | all | M8 | sustainment |
 
 ## Workspace layout
 

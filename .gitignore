@@ -17,3 +17,8 @@ target/
 # Added by cargo
 
 /target
+
+# Dealers Choice runtime data (database, sim runs, blueprints): see docs/tech/storage.md
+/data/
+# Temporary git worktrees created by coding agents
+/.claude/worktrees/
