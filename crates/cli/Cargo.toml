@@ -11,6 +11,9 @@ path = "src/main.rs"
 
 [dependencies]
 bots = { path = "../bots" }
+serde_json = { workspace = true }
+rayon = { workspace = true }
+sim = { path = "../sim" }
 clap = { workspace = true }
 engine = { path = "../engine" }
 games = { path = "../games" }

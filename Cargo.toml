@@ -11,8 +11,11 @@ license = "GPL-3.0-or-later"
 # Pin dependency versions once here; crates opt in with `dep = { workspace = true }`.
 [workspace.dependencies]
 clap = { version = "4", features = ["derive"] }
+postcard = { version = "1", features = ["alloc"] }
 rand = "0.9"
+rayon = "1"
 rand_chacha = "0.9"
 serde = { version = "1", features = ["derive"] }
 toml = "0.9"
+serde_json = "1"
 smallvec = { version = "1", features = ["serde", "union", "const_generics"] }

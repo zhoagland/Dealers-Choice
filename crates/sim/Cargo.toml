@@ -1,0 +1,18 @@
+[package]
+name = "sim"
+description = "Parallel bot-vs-bot simulation with duplicate deals and confidence intervals"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bots = { path = "../bots" }
+engine = { path = "../engine" }
+postcard = { workspace = true }
+rand = { workspace = true }
+rayon = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+games = { path = "../games" }
