@@ -15,6 +15,14 @@ Implements FR-UI-1, FR-UI-2.
 | `dc replay <hand-id or file>` | Step through a recorded hand | M2 |
 | `dc player add|list|deposit|reset` | Profile and bankroll management | M6 |
 
+## CPU use
+
+- `dc play`: bots think only on their own turn, on one core, capped by `--think-ms` (default
+  500). Nothing runs while the human decides; there is no pondering. The coach review runs after each
+  hand (`--review-playouts`); live hints (`--hints`) run before each human decision.
+- `dc sim` / `dc bench-sim`: all cores by default; `--threads N` limits them. Results are identical
+  for any thread count.
+
 ## Play loop
 
 ```
