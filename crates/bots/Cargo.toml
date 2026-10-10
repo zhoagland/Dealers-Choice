@@ -1,0 +1,17 @@
+[package]
+name = "bots"
+description = "Game-agnostic bots for the Dealers Choice engine: random, MCCFR, ISMCTS"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+engine = { path = "../engine" }
+rand = { workspace = true }
+serde = { workspace = true }
+smallvec = { workspace = true }
+
+# Bots never depend on `games` (that's what keeps them game-agnostic, FR-GD-6).
+# Tests use real games, so `games` is a dev-dependency only.
+[dev-dependencies]
+games = { path = "../games" }
