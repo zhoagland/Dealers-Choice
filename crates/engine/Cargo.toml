@@ -9,3 +9,4 @@ license.workspace = true
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 serde = { workspace = true }
+smallvec = { workspace = true }
