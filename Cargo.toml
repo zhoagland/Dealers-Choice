@@ -1,6 +1,15 @@
-[package]
-name = "dealers_choice"
-version = "0.1.0"
-edition = "2021"
+[workspace]
+resolver = "3"
+members = ["crates/*"]
 
-[dependencies]
+# Shared metadata: each crate writes `edition.workspace = true` etc. to inherit these.
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+
+# Pin dependency versions once here; crates opt in with `dep = { workspace = true }`.
+[workspace.dependencies]
+rand = "0.9"
+rand_chacha = "0.9"
+serde = { version = "1", features = ["derive"] }

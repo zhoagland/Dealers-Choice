@@ -1,0 +1,11 @@
+[package]
+name = "engine"
+description = "Core types for the Dealers Choice card game engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rand = { workspace = true }
+rand_chacha = { workspace = true }
+serde = { workspace = true }
