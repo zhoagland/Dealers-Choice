@@ -21,9 +21,11 @@
 
 use std::collections::HashMap;
 
+use engine::rng::{Stream, derive_rng};
 use engine::{Chips, Game, HandSetup, Seat, ToAct};
 
-use crate::strategy::Strategy;
+use crate::policy::Policy;
+use crate::strategy::{Probs, Strategy};
 
 /// The BR seat's decision states for one information set.
 struct Group<S> {
@@ -234,6 +236,84 @@ pub fn exploitability<G: Game>(game: &G, strategy: &dyn Strategy<G>) -> f64 {
         total += (br0 + br1) / 2.0;
     }
     total / 2.0
+}
+
+/// Every information set reachable from `setup`, with its legal actions. Small games only (it
+/// walks the whole tree). Used to turn a sampling bot into a strategy table.
+pub fn information_sets<G: Game>(
+    game: &G,
+    setup: &HandSetup,
+) -> HashMap<G::Observation, Vec<G::Action>> {
+    fn walk<G: Game>(game: &G, s: &G::State, out: &mut HashMap<G::Observation, Vec<G::Action>>) {
+        let mut legal = Vec::new();
+        game.legal_actions(s, &mut legal);
+        match game.to_act(s) {
+            ToAct::Terminal => return,
+            ToAct::Chance => {}
+            ToAct::Seat(p) => {
+                out.entry(game.observe(s, p))
+                    .or_insert_with(|| legal.clone());
+            }
+        }
+        for &a in &legal {
+            let mut next = s.clone();
+            game.apply(&mut next, a);
+            walk(game, &next, out);
+        }
+    }
+    let mut out = HashMap::new();
+    walk(game, &game.new_hand(setup), &mut out);
+    out
+}
+
+/// A strategy table built by asking a stochastic policy what it would do, `samples` times per
+/// information set, for both button positions. This is how exploitability gets measured for
+/// bots like ISMCTS that have no explicit strategy. Sampling noise is of order 1/√samples.
+pub struct SampledStrategy<G: Game> {
+    table: HashMap<G::Observation, Probs>,
+}
+
+impl<G: Game> SampledStrategy<G> {
+    pub fn from_policy(
+        game: &G,
+        policy: &mut dyn Policy<G>,
+        samples: u32,
+        seed: u64,
+    ) -> SampledStrategy<G> {
+        let mut table = HashMap::new();
+        for button in [Seat(0), Seat(1)] {
+            let setup = HandSetup {
+                button,
+                chooser: button,
+                ..HandSetup::simple(2, Chips(10_000))
+            };
+            // HashMap iteration order differs between runs; sort so seeds map to the same info sets.
+            let mut sets: Vec<_> = information_sets(game, &setup).into_iter().collect();
+            sets.sort_by_key(|(obs, _)| format!("{obs:?}"));
+            for (i, (obs, legal)) in sets.into_iter().enumerate() {
+                let mut rng = derive_rng(seed, i as u64, Stream::Custom(button.0 as u32));
+                let mut counts = vec![0u32; legal.len()];
+                for _ in 0..samples {
+                    let a = policy.act(game, &obs, &legal, &mut rng);
+                    counts[legal.iter().position(|&l| l == a).unwrap()] += 1;
+                }
+                table.insert(
+                    obs,
+                    counts.iter().map(|&c| c as f64 / samples as f64).collect(),
+                );
+            }
+        }
+        SampledStrategy { table }
+    }
+}
+
+impl<G: Game> Strategy<G> for SampledStrategy<G> {
+    fn probs(&self, _: &G, obs: &G::Observation, legal: &[G::Action]) -> Probs {
+        match self.table.get(obs) {
+            Some(p) => p.clone(),
+            None => legal.iter().map(|_| 1.0 / legal.len() as f64).collect(),
+        }
+    }
 }
 
 fn to_units<G: Game>(game: &G, chips: Chips) -> f64 {
