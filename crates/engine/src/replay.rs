@@ -49,3 +49,47 @@ pub fn replay<G: Game>(
     }
     Ok(state)
 }
+
+/// Rebuild a state when the deals and the player actions are known separately, which is the usual
+/// situation inside `determinize`: the observation has the public action list, and the driver has
+/// just sampled the hidden cards.
+///
+/// Walks the game from `new_hand`. Whenever it's a chance node, the next item from `deals` is applied;
+/// whenever a seat acts, the next item from `actions`. It stops at the terminal, or as soon as the next
+/// needed item isn't available (the observation's "present moment").
+///
+/// Panics if items are left over, because that means the observation and the game disagree about the
+/// order of events: a driver bug.
+pub fn replay_interleaved<G: Game>(
+    game: &G,
+    setup: &HandSetup,
+    deals: impl IntoIterator<Item = G::Action>,
+    actions: impl IntoIterator<Item = G::Action>,
+) -> G::State {
+    // `.peekable()` lets us look at the next item without consuming it.
+    let mut deals = deals.into_iter().peekable();
+    let mut actions = actions.into_iter().peekable();
+    let mut state = game.new_hand(setup);
+    loop {
+        let next = match game.to_act(&state) {
+            ToAct::Terminal => break,
+            ToAct::Chance => deals.next(),
+            ToAct::Seat(_) => actions.next(),
+        };
+        match next {
+            Some(a) => {
+                debug_assert!(
+                    game.validate(&state, a).is_ok(),
+                    "replay_interleaved: {a:?} invalid"
+                );
+                game.apply(&mut state, a);
+            }
+            None => break,
+        }
+    }
+    assert!(
+        deals.peek().is_none() && actions.peek().is_none(),
+        "replay_interleaved: unused deals or actions; observation and game disagree on event order"
+    );
+    state
+}
