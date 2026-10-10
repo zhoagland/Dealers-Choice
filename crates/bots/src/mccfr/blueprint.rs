@@ -1,9 +1,13 @@
 //! A trained strategy table, and a bot that plays from it (FR-BT-3, FR-ST-3).
-//! Saving to and loading from disk is added in the storage PR.
+//!
+//! On disk (`to_bytes` / `from_bytes`): postcard of [`BlueprintFile`]. It carries the game id and
+//! version, so a blueprint trained under different rules refuses to load (API doc §8). The storage
+//! crate decides where files live and compresses them.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 use engine::game::sample_weighted;
@@ -51,6 +55,55 @@ impl<G: Game> Blueprint<G> {
 
     pub fn iter(&self) -> impl Iterator<Item = (&G::Observation, &Distribution<G::Action>)> {
         self.table.iter()
+    }
+}
+
+/// The serialized form. Entries are sorted by their encoded bytes so the same blueprint always
+/// produces the same file (HashMap order would differ between runs).
+#[derive(Serialize, Deserialize)]
+#[serde(
+    bound = "O: Serialize + serde::de::DeserializeOwned, A: Serialize + serde::de::DeserializeOwned"
+)]
+pub struct BlueprintFile<O, A> {
+    pub game_id: String,
+    pub game_version: u32,
+    pub iterations: u64,
+    pub entries: Vec<(O, Vec<(A, f64)>)>,
+}
+
+impl<G: Game> Blueprint<G> {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut entries: Vec<(Vec<u8>, (G::Observation, Vec<(G::Action, f64)>))> = self
+            .table
+            .iter()
+            .map(|(o, d)| (postcard::to_allocvec(o).unwrap(), (o.clone(), d.to_vec())))
+            .collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        let file = BlueprintFile {
+            game_id: self.game_id.clone(),
+            game_version: self.game_version,
+            iterations: self.iterations,
+            entries: entries.into_iter().map(|(_, e)| e).collect(),
+        };
+        postcard::to_allocvec(&file).expect("blueprints always serialize")
+    }
+
+    /// Load, checking it was trained for this game and rules version.
+    pub fn from_bytes(game: &G, bytes: &[u8]) -> Result<Blueprint<G>, String> {
+        let file: BlueprintFile<G::Observation, G::Action> =
+            postcard::from_bytes(bytes).map_err(|e| format!("corrupt blueprint: {e}"))?;
+        let meta = game.meta();
+        if file.game_id != meta.id || file.game_version != meta.version {
+            return Err(format!(
+                "blueprint is for {} v{}, not {} v{}",
+                file.game_id, file.game_version, meta.id, meta.version
+            ));
+        }
+        let mut bp = Blueprint::new(&file.game_id, file.game_version, file.iterations);
+        for (o, d) in file.entries {
+            bp.insert(o, d.into_iter().collect());
+        }
+        Ok(bp)
     }
 }
 

@@ -5,15 +5,23 @@
 
 mod human;
 mod play;
+mod player;
 mod simulate;
 mod spot;
 mod tools;
 
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand};
+
+use storage::DataRoot;
 
 #[derive(Parser)]
 #[command(name = "dc", version, about = "Dealers Choice card game engine")]
 struct Cli {
+    /// Where the database, sim runs, and blueprints live (default: $DC_DATA_ROOT or ./data).
+    #[arg(long, global = true)]
+    data_root: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -22,6 +30,9 @@ struct Cli {
 enum Command {
     /// List the registered games.
     Games,
+    /// Manage players and bankrolls.
+    #[command(subcommand)]
+    Player(player::PlayerCmd),
     /// Play a Dealer's Choice session against bots.
     Play(play::PlayArgs),
     /// Train an MCCFR strategy (small games) and report its exploitability.
@@ -38,13 +49,15 @@ enum Command {
 
 fn main() {
     let cli = Cli::parse();
+    let root = DataRoot::resolve(cli.data_root.as_deref());
     let result = match cli.command {
         Command::Games => tools::list_games(),
-        Command::Play(args) => play::run(args),
-        Command::Train(args) => tools::train(args),
+        Command::Player(cmd) => player::run(cmd, &root),
+        Command::Play(args) => play::run(args, &root),
+        Command::Train(args) => tools::train(args, &root),
         Command::Exploit(args) => tools::exploit(args),
         Command::Spot(args) => spot::run(args),
-        Command::Sim(args) => simulate::sim(args),
+        Command::Sim(args) => simulate::sim(args, &root),
         Command::BenchSim(args) => simulate::bench(args),
     };
     if let Err(e) = result {

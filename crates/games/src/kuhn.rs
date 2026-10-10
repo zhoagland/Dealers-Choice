@@ -49,7 +49,7 @@ pub struct State {
     history: SmallVec<[Action; 3]>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Observation {
     pub seat: Seat,
     pub button: Seat,

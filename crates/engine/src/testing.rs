@@ -280,7 +280,7 @@ mod tests {
         decisions: Vec<(Seat, Act)>,
     }
 
-    #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+    #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
     struct Obs {
         seat: Seat,
         n: u8,

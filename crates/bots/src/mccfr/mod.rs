@@ -271,6 +271,28 @@ mod tests {
         total / n
     }
 
+    #[test]
+    fn blueprint_round_trips_and_checks_version() {
+        let game = Kuhn::new(kuhn::Config {});
+        let mut trainer = Mccfr::new(MccfrConfig::default());
+        trainer.train(&game, 2_000, &mut rng_from_seed(1));
+        let bp = trainer.blueprint(&game);
+        let bytes = bp.to_bytes();
+        assert_eq!(
+            bytes,
+            trainer.blueprint(&game).to_bytes(),
+            "deterministic encoding"
+        );
+        let back = Blueprint::from_bytes(&game, &bytes).unwrap();
+        assert_eq!(back.len(), bp.len());
+        assert!((exploitability(&game, &back) - exploitability(&game, &bp)).abs() < 1e-12);
+        // A Leduc blueprint must not load as Kuhn.
+        let leduc = Leduc::new(leduc::Config {});
+        let mut t2 = Mccfr::new(MccfrConfig::default());
+        t2.train(&leduc, 10, &mut rng_from_seed(1));
+        assert!(Blueprint::from_bytes(&game, &t2.blueprint(&leduc).to_bytes()).is_err());
+    }
+
     /// Leduc is bigger and has two rounds: just check that training clearly reduces exploitability.
     #[test]
     fn leduc_exploitability_drops() {

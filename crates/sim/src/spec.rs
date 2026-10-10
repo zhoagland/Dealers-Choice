@@ -2,6 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
+use std::sync::Arc;
+
+use bots::mccfr::{Blueprint, BlueprintPolicy};
 use bots::{Budget, IsmctsBot, Policy, RandomPolicy};
 use engine::Game;
 
@@ -11,7 +14,14 @@ use engine::Game;
 #[serde(try_from = "String", into = "String")]
 pub enum BotSpec {
     Random,
-    Ismcts { level: u8, playouts: Option<u32> },
+    Ismcts {
+        level: u8,
+        playouts: Option<u32>,
+    },
+    /// A saved MCCFR blueprint file (`dc train --save`).
+    Blueprint {
+        path: String,
+    },
 }
 
 impl BotSpec {
@@ -20,6 +30,9 @@ impl BotSpec {
     pub fn build<G: Game>(&self) -> Box<dyn Policy<G>> {
         match *self {
             BotSpec::Random => Box::new(RandomPolicy),
+            BotSpec::Blueprint { ref path } => {
+                Box::new(BlueprintPolicy::new(cached_blueprint::<G>(path)))
+            }
             BotSpec::Ismcts { level, playouts } => {
                 let mut bot = IsmctsBot::<G>::preset(level, false);
                 if let Some(p) = playouts {
@@ -47,6 +60,12 @@ impl From<BotSpec> for String {
 impl std::str::FromStr for BotSpec {
     type Err = String;
     fn from_str(s: &str) -> Result<BotSpec, String> {
+        // Checked first: paths (e.g. `C:\…`) may themselves contain ':'.
+        if let Some(path) = s.strip_prefix("mccfr:") {
+            return Ok(BotSpec::Blueprint {
+                path: path.to_string(),
+            });
+        }
         let parts: Vec<&str> = s.split(':').collect();
         let num = |p: &str| {
             p.parse::<u32>()
@@ -73,6 +92,7 @@ impl std::fmt::Display for BotSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             BotSpec::Random => write!(f, "random"),
+            BotSpec::Blueprint { path } => write!(f, "mccfr:{path}"),
             BotSpec::Ismcts {
                 level,
                 playouts: None,
@@ -83,6 +103,39 @@ impl std::fmt::Display for BotSpec {
             } => write!(f, "ismcts:{level}:{p}"),
         }
     }
+}
+
+/// Blueprints are loaded once per process and shared: bots are built once per hand, and
+/// re-reading the file each time made blueprint sims ~100× slower than necessary.
+///
+/// The cache must hold blueprints for *any* game type, so entries are stored type-erased as
+/// `Arc<dyn Any>` and downcast back to `Blueprint<G>` on the way out. A path loaded as one game
+/// and requested as another fails the downcast and is reloaded (and then rejected by the game
+/// id check).
+fn cached_blueprint<G: Game>(path: &str) -> Arc<Blueprint<G>> {
+    use std::any::Any;
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    type Cache = Mutex<HashMap<String, Arc<dyn Any + Send + Sync>>>;
+    static CACHE: OnceLock<Cache> = OnceLock::new();
+
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(any) = cache.lock().unwrap().get(path).cloned()
+        && let Ok(bp) = any.downcast::<Blueprint<G>>()
+    {
+        return bp;
+    }
+    let bp = Arc::new(load_blueprint::<G>(path));
+    cache.lock().unwrap().insert(path.to_string(), bp.clone());
+    bp
+}
+
+/// Read a blueprint file (postcard, see `bots::mccfr::blueprint`). Panics with a clear message if it
+/// can't be loaded: a sim with a missing bot can't produce meaningful results.
+fn load_blueprint<G: Game>(path: &str) -> Blueprint<G> {
+    let raw = std::fs::read(path).unwrap_or_else(|e| panic!("blueprint {path}: {e}"));
+    let game = G::new(G::Config::default());
+    Blueprint::from_bytes(&game, &raw).unwrap_or_else(|e| panic!("blueprint {path}: {e}"))
 }
 
 /// A simulation run.
