@@ -2,7 +2,8 @@
   <img src="images/logo.png" alt="Logo" width="80" height="80">
   <h3>Dealers Choice</h3>
   <p>A card-game engine for the home games in the Poker Bible: play against bots of chosen
-  strength, get coached on your decisions, analyze spots, and run large simulations.</p>
+  strength, get coached on your decisions, analyze spots, run large simulations, and (coming next)
+  play Dealer's Choice with friends in the browser.</p>
 </div>
 
 ## What's here
@@ -34,6 +35,37 @@ cargo build --release
 ./target/release/dc config                                  # edit saved profiles
 ```
 
+## Roadmap (Phase 2)
+
+Three tracks run in parallel once the v1 build is merged. Requirements: `docs/prd.md` §2.1, §5.9–5.11, §9.1.
+
+| Track | What | Plan |
+|---|---|---|
+| **Simulations** | Background campaigns on your PC with HTML reports: game balance for every Bible game, a bot strength ladder, starting-hand and decision studies, solver blueprints | `docs/tech/sim-program.md` |
+| **Full catalog** | All 50 Bible games, poker and non-poker, built by mechanic family (API v2 adds multi-hand games, stuns, jokers, new evaluators) | `docs/tech/game-catalog.md` |
+| **Web multiplayer** | Play Dealer's Choice with friends over the internet: Discord sign-in, mobile-friendly table, chat, hand history, self-hosted | `docs/tech/web.md` |
+
+### Game catalog status
+
+| Family | Games | Status |
+|---|---|---|
+| Texas Hold'em | Texas Hold'em | ✅ |
+| Stud | Follow the Queen | ✅ |
+| Foundation | API v2: multi-hand games, stuns, jokers, table view | planned (G0) |
+| Omaha | Pot Limit Omaha, 5 Card Omaha, Courchevel, Red River, PLO Double Board Bomb Pot | planned (G1) |
+| Board shapes | Elevator, Wheel of Death, Spit, Industrial Elevator, Iron Cross | planned (G2) |
+| Hold'em twists | 6+ Hold'em, Showtime Hold'em, Reverse Poker, Split Hold'em | planned (G3) |
+| Draw & discard | 5 Card Draw, Triple Draw, 2-7 Single Draw, 2-7 Triple Draw, Badugi, 3 Blind Mice, Crazy Pineapple, Mama's Favorite, Swap Hold'em, Fusion | planned (G4) |
+| Pass & in/out | Pass the Trash, Man or Mouse, 43 | planned (G5) |
+| Stud variants | 7 Card Stud, Razz, Baseball, Chicago High, Chicago Low, Low in the Hole, Push, Bullet, Bid | planned (G6) |
+| Indian | Indian Poker, Indian Texas Hold'em | planned (G7) |
+| Multi-hand & stuns | Guts Leg, 3-2-1 Drop, 3-5-7, Scare-a-moosh, Tempest Hold'em | planned (G8) |
+| Numbers & house | Blackjack, 7/27, 5.5/21.5, Numbers | planned (G9) |
+| Trick-taking | Whooh Ray for Booray | planned (G10) |
+
+Where the Bible is ambiguous, each game's rule decisions are listed in `docs/tech/game-catalog.md` §5 for
+review.
+
 ## Documentation
 
 | | |
@@ -42,7 +74,8 @@ cargo build --release
 | `docs/api/game-driver.md` | The game-driver contract |
 | `docs/dev/adding-a-game.md` | How to add a game |
 | `docs/dev/handbook.md` | Running, debugging, versioning, releasing, CI, known limits, backlog |
-| `docs/tech/` | Per-crate design and measured performance |
+| `docs/tech/` | Per-crate design, measured performance, and the Phase 2 plans |
+| `ChangeLog.md` | What changed in each release |
 
 ## License
 

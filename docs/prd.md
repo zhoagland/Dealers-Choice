@@ -2,8 +2,8 @@
 
 | Field   | Value                         |
 |---------|-------------------------------|
-| Status  | Approved v0.1 (2026-10-10); M0–M8 implemented, see `ChangeLog.md` |
-| Date    | 2026-10-10                    |
+| Status  | v0.1 approved (2026-10-10), M0–M8 implemented, see `ChangeLog.md`. **v0.2 (Phase 2: §2.1, §5.9–5.11, §9.1) is a draft for owner review** |
+| Date    | 2026-10-10 (v0.1), 2026-11-10 (v0.2 draft) |
 | Owner   | Zachary Hoagland              |
 | Rules source of truth | `Rules/Poker Bible.typ` |
 
@@ -41,6 +41,18 @@ simulator are game-agnostic and only interact with games through that API.
 - Real money, rake.
 - Solving full-scale multiway games to equilibrium (no algorithm guarantees this; see §8).
 - Implementing all ~50 Bible games. v1 ships 3; the API must *admit* the rest.
+
+### 2.1 Phase 2 goals (v0.2 draft)
+Three tracks that run in parallel after the v1 stack is merged (M9):
+- **S: Simulation program.** Answer four questions with background campaigns on the dev PC and HTML
+  reports: game balance per Bible game, a bot strength ladder, strategy studies for the owner, and solver
+  blueprints. Plan: `docs/tech/sim-program.md`.
+- **G: Full catalog.** Implement the remaining 48 Bible games, poker and non-poker, by mechanic family,
+  one PR per family. Where the Bible is ambiguous: decide, log, and flag for the owner. Plan: `docs/tech/game-catalog.md`.
+- **W: Web multiplayer.** Friends play Dealer's Choice over the internet: Discord login, humans only, chat and
+  hand history, mobile-friendly, self-hosted on the owner's server. Plan: `docs/tech/web.md`.
+
+Phase 2 non-goals: bots at web tables, coach in the web UI, spectators, real money, cloud compute for sims.
 
 ## 3. Users and modes
 
@@ -225,6 +237,48 @@ House conventions that are engine-level, not per-game:
 - **FR-UI-2** All engine I/O (observations, actions, events, evaluations) is `serde`-serializable.
   A later web server (WebSocket) is a transport adapter, not a rewrite.
 
+### 5.9 Simulation program (Phase 2, track S; `docs/tech/sim-program.md`)
+- **FR-SP-1** Campaigns: a TOML file expands to many runs (games × seat counts × bot populations × config
+  sweeps). `dc campaign plan` estimates time and disk before running.
+- **FR-SP-2** Unattended background execution on the dev PC: frozen binary copy, chunked and resumable runs,
+  pause/resume, lowered priority, thread cap (default cores − 2).
+- **FR-SP-3** Self-contained offline HTML report per run and per campaign. Every number shows n and 95 % CI.
+- **FR-SP-4** Balance campaign: per-game variance, pot sizes, showdown rate, positional EV, winning hand
+  categories, declaration outcomes, and the effect of house-rule config sweeps.
+- **FR-SP-5** Strength ladder: per-game ratings of strength presets with CIs, and a check of FR-BT-5 (same
+  τ ⇒ similar EV loss per decision in every game).
+- **FR-SP-6** Strategy study: starting-hand EV grids and batch spot-analysis grids. Requires the rollout fix
+  (handbook backlog #1) before results are trusted.
+- **FR-SP-7** Blueprints: MCCFR for Indian Poker and 3-2-1 Drop, then abstracted heads-up Hold'em.
+- **FR-SP-8** Every summary records binary sha, game version, and sweep values, so stale results are detectable.
+
+### 5.10 Full game catalog (Phase 2, track G; `docs/tech/game-catalog.md`)
+- **FR-GC-1** All 50 Bible games playable in CLI, sims and web, including non-poker games.
+- **FR-GC-2** API v2 (`API_VERSION` 2): `Carry` + `GameLength::UntilDone` for multi-hand games, `view()`
+  for graphical UIs. Existing games migrate.
+- **FR-GC-3** Engine additions: jokers, stuns (`Penalty`), N-way pot shares, pluggable evaluators (Omaha 2o2,
+  2-7, Badugi, short deck, 3-card, board geometry, numbers, spade halves, single card), per-seat wilds.
+- **FR-GC-4** Ambiguous rules are decided, recorded as `D-*` decisions in the catalog plan and module docs, covered
+  by a rule test, and flagged in the PR for the owner (OQ-8).
+- **FR-GC-5** Bible "Variations" are `Config` flags, default off, sweepable in sims.
+- **FR-GC-6** Implemented by mechanic family, one PR per family (G0–G10).
+- **FR-GC-7** Every new evaluator has a brute-force oracle test.
+- **FR-GC-8** "If you're out you're out" is a session-level flag for UntilDone/Orbit games.
+
+### 5.11 Web multiplayer (Phase 2, track W; `docs/tech/web.md`)
+- **FR-WB-1** Server-authoritative `server` crate (axum + WebSocket); clients only ever receive their own seat's view.
+- **FR-WB-2** Discord OAuth sign-in; optional guild allowlist; admin list. No passwords.
+- **FR-WB-3** Lobby: create a table, invite link, sit/stand/sit-out, host start.
+- **FR-WB-4** Dealer's Choice flow as FR-SS-4, with a game picker for the chooser.
+- **FR-WB-5** Play-money bankroll per account on the existing ledger; starting $100; optional settle-up page.
+- **FR-WB-6** Turn timers with a time bank; deterministic timeout actions; reconnect resumes the seat.
+- **FR-WB-7** Table chat (rate-limited, admin-moderated).
+- **FR-WB-8** Hand history replayed from the viewer's own observations only.
+- **FR-WB-9** Mobile-first responsive table; tested on iOS Safari and Android Chrome.
+- **FR-WB-10** Single Docker image, self-hosted behind the owner's reverse proxy; nightly SQLite backups.
+- **FR-WB-11** One generic renderer driven by `TableView`; no per-game client code.
+- **FR-WB-12** Humans only in web v1; the seat model admits bots later.
+
 ## 6. Non-functional requirements
 
 - **NFR-1 Determinism.** Same inputs → identical hand, bit for bit, across runs on one platform.
@@ -298,6 +352,25 @@ House conventions that are engine-level, not per-game:
 | M7 | Player analytics (FR-PA-1…4) | Stats and leak report reproduce known values on synthetic players with planted leaks (e.g. a bot that always calls the river) |
 | M8 | NPI → sustainment handoff: CI (fmt, clippy, tests per PR; nightly release-mode exhaustive + benchmark tests), sustainment handbook (architecture map, run/debug/replay, versioning and invalidation rules, release checklist, known limits, prioritized backlog), adding-a-game guide | Owner can add a game, change rules, cut a release, and diagnose a CI failure using only the docs |
 
+### 9.1 Phase 2 milestones (v0.2 draft)
+
+| ID | Deliverable | Exit criteria |
+|---|---|---|
+| M9 | Merge PRs #1–#18 in order (clippy fix for Rust 1.98 included in the plans PR), plus the Phase 2 plans PR | `main` builds; CI green on both OSes |
+| G0 | API v2 foundation (`game-catalog.md` §2) | v1 tests pass on v2; toy UntilDone game passes conformance |
+| G1–G10 | Game families (`game-catalog.md` §4), one PR each | Per-game definition of done (`game-catalog.md` §4) |
+| S1–S6 | Simulation program (`sim-program.md` §6) | Per milestone |
+| W1–W6 | Web multiplayer (`web.md` §12) | Per milestone |
+
+Sequencing: M9 → G0 → then three parallel tracks. S1–S3 start on Hold'em + FTQ immediately after M9; W1 needs
+G0's `view()`; each G family adds its games to the balance campaign and the web gallery.
+
+```
+M9 ─┬─ S1 → S2 → S3 (grows with G) → S4 → S5 → S6
+    └─ G0 ─┬─ G1 → G2 → G3 → G4 → G5 → G6 → G7 → G8 → G9 → G10
+           └─ W1 → W2 → W3 → W4 → W5 → W6
+```
+
 ## 10. Assumptions (with sensitivity)
 
 | # | Assumption | If false |
@@ -310,6 +383,10 @@ House conventions that are engine-level, not per-game:
 | A6 | ~0.5 s per bot decision is acceptable during play | Strength presets would need re-tuning |
 | A7 | FTQ bet/raise increments are any multiple of $0.50 from $0.50 to $2.00 (confirmed) | — |
 | A8 | FTQ "best board": visible wilds count; no partial straights/flushes; ties → closest to dealer's left | Only the action-order function changes |
+| A9 | Games without Bible stakes use the defaults in `game-catalog.md` §3 (pot-limit Omaha family, FTQ spread elsewhere, dealer ante only) | Config change per game + version bump; sims re-run |
+| A10 | Sims run on the dev PC only, sharing it with development | Campaign estimates are for ~12 threads; a cloud box only changes `--threads` |
+| A11 | The web group is small (≤ ~30 accounts, ≤ 5 concurrent tables): one process + SQLite suffices | Move to Postgres and multiple processes (storage.md §4) |
+| A12 | Discord is the only identity provider | Add providers behind the same `account` table |
 
 ## 11. Open questions
 
@@ -324,6 +401,14 @@ House conventions that are engine-level, not per-game:
 - ~~OQ-6~~ Resolved: FR-SS-3.
 - **OQ-7** Coach mode in multiway pots: EV against the ISMCTS opponent model only, or against a
   user-chosen opponent model?
+- **OQ-8** Owner review of the catalog rule decisions (`game-catalog.md` §5, all `D-*`). Highest-impact ones:
+  D-ALL-1 (default stakes), D-SW-1 (Swap Hold'em), D-TEM-1 (Tempest numbers), D-CHI-1 (Chicago spade = hole
+  cards only), D-357-1 (3-5-7 setup), D-DB-1 (bomb pot), D-BJ-1 (bank strategy).
+- **OQ-9** Stun cap: the Bible says "matches the pot up to $10. This value may change during play." Is $10 a
+  fixed house cap, or set per game by the chooser?
+- **OQ-10** Web turn-timer defaults (30 s + 60 s bank) and timeout actions (D-WEB-4).
+- **OQ-11** Deployment target: server OS/architecture, Docker availability, reverse proxy, domain, Discord app
+  credentials, and whether to restrict sign-in to a Discord server (guild id).
 
 ## 12. Glossary
 

@@ -167,10 +167,10 @@ playouts/s/thread (Hold'em), ~55 k (FTQ). Full table: `docs/tech/sim.md` §5.
 1. **Better rollout policy** (equity-aware instead of check-down). Fixes the most visible coach bias.
 2. **FR-PA-5 exploitative bots / opponent model**: weight determinization by the player's
    observed tendencies (from `dc stats`), with capped deviation.
-3. **Web UI** (axum + WebSocket): engine I/O is already serde; observations are per seat.
+3. **Web UI**: planned as Phase 2 track W, `docs/tech/web.md`.
 4. **FR-BT-8 external policy adapter (Jev)**: protocol in `docs/tech/bots.md` §6.
-5. **`UntilDone` games** (Guts Leg, 3-2-1 Drop): `type Carry` in the API (v2), game doc §9.
-6. **More Bible games** via `docs/dev/adding-a-game.md`.
+5. **`UntilDone` games** (Guts Leg, 3-2-1 Drop): planned as API v2 (milestone G0), `docs/tech/game-catalog.md` §2.
+6. **More Bible games**: planned as Phase 2 track G (all 48), `docs/tech/game-catalog.md`.
 7. **HUNL MCCFR** with card/action abstraction (`Abstraction` trait; bots.md §3).
 8. **GPU / neural**: equity on GPU (`wgpu`/`cudarc`), value networks (`candle`/`burn`) for
    depth-limited search. A 3080 is enough for small networks.

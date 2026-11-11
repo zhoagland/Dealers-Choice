@@ -1,5 +1,11 @@
 # Change Log
 
+## Unreleased
+
+- Phase 2 plans: PRD v0.2 draft (simulation program, full game catalog, web multiplayer) and
+  tech plans `docs/tech/{sim-program,game-catalog,web}.md`.
+- Fixed: clippy `unnecessary_sort_by` on Rust 1.98 (`bots::mccfr::best_response`).
+
 ## 0.1.0 — NPI build (2026-10-10)
 
 First working version, built milestone by milestone (PRD M0–M8):

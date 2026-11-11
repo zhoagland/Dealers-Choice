@@ -266,6 +266,8 @@ server boundary. Everything downstream is generic and monomorphized.
   `UntilDone` games (Guts Leg legs, 3-2-1 Drop carry-over pot) need state passed between hands:
   a `type Carry` produced at terminal and fed into the next `new_hand`, plus `fn game_over(&Carry) -> bool`.
   Deferred until the first such driver (YAGNI). That would be `API_VERSION` 2.
+  **Planned (Phase 2, milestone G0):** API v2 adds `type Carry`, `carry_out`, `game_over`,
+  `GameLength::UntilDone`, and a required `view()` for the web UI. See `docs/tech/game-catalog.md` §2.
 - **Rendering.** *Changed during implementation:* the text hooks `describe_observation`,
   `describe_action`, `parse_action` are default methods on `Game` (defaults: `Debug`, none).
   A separate `Render<G>` trait in the CLI would need its own per-game registry, because
