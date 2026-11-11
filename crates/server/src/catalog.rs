@@ -28,6 +28,16 @@ pub fn family(id: &str) -> &'static str {
     }
 }
 
+/// A one-line summary from the all-games table in `docs/tech/games.md` ("shape; hands").
+fn summary(id: &str) -> Option<String> {
+    const DOC: &str = include_str!("../../../docs/tech/games.md");
+    let key = format!("| `{id}` |");
+    let row = DOC.lines().find(|l| l.starts_with(&key))?;
+    let cols: Vec<&str> = row.split('|').map(str::trim).collect();
+    // ["", id, game, shape, hands, decisions, ""]
+    Some(format!("{}. Hands: {}.", cols.get(3)?, cols.get(4)?))
+}
+
 /// Games in `pool` (empty = every Bible game), with their details.
 pub fn playable(pool: &[String]) -> Vec<GameInfo> {
     struct Info(&'static str);
@@ -40,7 +50,7 @@ pub fn playable(pool: &[String]) -> Vec<GameInfo> {
                 family: family(self.0).into(),
                 seats_min: *m.seats.start(),
                 seats_max: *m.seats.end(),
-                rules: m.rules_ref.into(),
+                rules: summary(self.0).unwrap_or_else(|| m.rules_ref.into()),
             }
         }
     }
@@ -61,5 +71,89 @@ mod tests {
         for g in &all {
             assert_ne!(g.family, "Other", "{} has no family", g.id);
         }
+        assert!(
+            all.iter()
+                .find(|g| g.id == "omaha5")
+                .unwrap()
+                .rules
+                .contains("declare")
+        );
+    }
+
+    /// Writes `web/src/generated/gallery.json`: a mid-hand and a final view of every game from
+    /// seat 0 after random play, for the client's `#/dev/views` gallery (web.md §8, W6).
+    #[test]
+    fn export_view_gallery() {
+        use engine::{Chips, Game, GameCarry, HandSetup, Seat, ToAct};
+        use games::registry::{GameVisitor, with_game};
+        use rand::Rng;
+
+        struct Views(u64);
+        impl GameVisitor<Vec<engine::TableView>> for Views {
+            fn visit<G: Game>(self, g: G) -> Vec<engine::TableView> {
+                let m = g.meta();
+                let n = 4u8.clamp(*m.seats.start(), *m.seats.end());
+                let setup = HandSetup::simple(n, Chips(10_000));
+                let carry = GameCarry::new(&g);
+                let mut s = carry.new_hand(&g, &setup);
+                let mut rng = engine::rng::rng_from_seed(self.0);
+                let mut legal = Vec::new();
+                let mut seen = Vec::new();
+                let me = Seat(0);
+                loop {
+                    match g.to_act(&s) {
+                        ToAct::Terminal => break,
+                        ToAct::Chance => {
+                            let a = g.sample_chance(&s, &mut rng);
+                            g.apply(&mut s, a);
+                        }
+                        ToAct::Seat(_) => {
+                            seen.push(g.view(&g.observe(&s, me)));
+                            g.legal_actions(&s, &mut legal);
+                            // Prefer passive actions so hands reach later streets.
+                            let passive: Vec<_> = legal
+                                .iter()
+                                .copied()
+                                .filter(|&a| {
+                                    matches!(
+                                        g.classify(&s, a),
+                                        engine::ActionClass::CheckOrCall { .. }
+                                    )
+                                })
+                                .collect();
+                            let pick = if !passive.is_empty() && rng.random_bool(0.85) {
+                                passive[rng.random_range(0..passive.len())]
+                            } else {
+                                legal[rng.random_range(0..legal.len())]
+                            };
+                            g.apply(&mut s, pick);
+                        }
+                    }
+                }
+                let mut out = Vec::new();
+                if !seen.is_empty() {
+                    out.push(seen[seen.len() * 2 / 3].clone());
+                }
+                out.push(g.view(&g.observe(&s, me)));
+                out
+            }
+        }
+
+        let mut entries = Vec::new();
+        for (i, g) in super::playable(&[]).into_iter().enumerate() {
+            let views = with_game(&g.id, None, Views(7 + i as u64)).unwrap();
+            entries.push(serde_json::json!({
+                "id": g.id, "name": g.name, "family": g.family, "views": views,
+            }));
+        }
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../web/src/generated/gallery.json");
+        std::fs::write(
+            &path,
+            serde_json::to_string(&entries).unwrap()
+                + "
+",
+        )
+        .unwrap();
     }
 }

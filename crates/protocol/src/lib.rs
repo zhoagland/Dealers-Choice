@@ -151,6 +151,8 @@ pub struct TableInfo {
     pub hand_no: u64,
     /// Recent table events, newest last.
     pub log: Vec<String>,
+    /// The table seat of each hand seat in the current hand (`TableView` seats are hand seats).
+    pub hand_seats: Vec<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -246,6 +248,8 @@ pub struct HandReplay {
     pub game: String,
     pub steps: Vec<ReplayStep>,
     pub text: String,
+    /// Player name per hand seat.
+    pub names: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -270,6 +274,13 @@ pub struct BankrollChange {
     /// "deposit" or "reset".
     pub op: String,
     pub cents: i64,
+}
+
+/// `GET /api/config`: what the client needs before sign-in.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ServerConfig {
+    pub discord_client_id: Option<String>,
+    pub dev_mode: bool,
 }
 
 /// Discord Activity: the browser sends the SDK's authorization code; the server answers with the
@@ -345,6 +356,7 @@ mod tests {
             pool: vec!["ftq".into()],
             hand_no: 3,
             log: vec!["Ann chose Follow the Queen".into()],
+            hand_seats: vec![0],
         }
     }
 
@@ -460,7 +472,7 @@ mod tests {
             "listing": TableListing { id: "t1".into(), name: "Friday".into(), players: 2, max_seats: 6, state: "waiting".into(), listed: true },
             "game": GameInfo { id: "ftq".into(), name: "FTQ".into(), family: "Stud".into(), seats_min: 2, seats_max: 7, rules: "Poker Bible".into() },
             "hand": HandListing { id: 1, game: "ftq".into(), at: 0, results: vec![] },
-            "replay": HandReplay { id: 1, game: "ftq".into(), steps: vec![ReplayStep { label: "start".into(), view: view() }], text: String::new() },
+            "replay": HandReplay { id: 1, game: "ftq".into(), steps: vec![ReplayStep { label: "start".into(), view: view() }], text: String::new(), names: vec!["Ann".into()] },
             "activity": ActivityToken { access_token: "a".into(), session: "s".into(), table: "t".into() },
         });
         let ts = format!(

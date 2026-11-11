@@ -63,6 +63,13 @@ pub async fn me(State(state): State<Shared>, Authed(acc): Authed) -> ApiResult<M
     }))
 }
 
+pub async fn config(State(state): State<Shared>) -> Json<protocol::ServerConfig> {
+    Json(protocol::ServerConfig {
+        discord_client_id: state.config.discord_client_id.clone(),
+        dev_mode: state.config.dev_mode,
+    })
+}
+
 pub async fn games(Authed(_): Authed) -> Json<Vec<GameInfo>> {
     Json(catalog::playable(&[]))
 }
@@ -345,7 +352,7 @@ pub async fn hand(
     let replay = Replay {
         record: row.record.clone(),
         seat: seat as u8,
-        names,
+        names: names.clone(),
     };
     let (game, steps, text) = with_game(&row.game_id, None, replay)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -355,6 +362,7 @@ pub async fn hand(
         game,
         steps,
         text,
+        names,
     }))
 }
 

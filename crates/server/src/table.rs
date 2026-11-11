@@ -101,6 +101,8 @@ pub struct Actor {
     listing: Arc<Mutex<TableListing>>,
     /// Views of the hand in progress, per table seat.
     views: HashMap<u8, TableView>,
+    /// Table seat per hand seat, for the hand in progress.
+    hand_seats: Vec<u8>,
     pending: Option<Pending>,
     /// Time bank left this game, per table seat (ms).
     bank: HashMap<u8, u64>,
@@ -160,6 +162,7 @@ pub fn spawn(
         hand_no: 0,
         listing: listing.clone(),
         views: HashMap::new(),
+        hand_seats: Vec::new(),
         pending: None,
         bank: HashMap::new(),
         next_prompt: 1,
@@ -255,6 +258,7 @@ impl Actor {
             pool: self.settings.pool.clone(),
             hand_no: self.hand_no,
             log: self.log.iter().cloned().collect(),
+            hand_seats: self.hand_seats.clone(),
         }
     }
 
@@ -590,6 +594,7 @@ impl Actor {
             },
         );
         self.views.clear();
+        self.hand_seats.clear();
         self.game = None;
         self.state = "choosing";
         // The choice passes left (FR-SS-4).
@@ -663,6 +668,7 @@ impl GameVisitor<()> for PlayGame<'_> {
             let table_seat = |k: usize| seats[map[k]];
             let refresh = |a: &mut Actor, state: &G::State| {
                 a.views.clear();
+                a.hand_seats = (0..map.len()).map(table_seat).collect();
                 for k in 0..map.len() {
                     if setup.dealt_in(Seat(k as u8)) {
                         let v = game.view(&game.observe(state, Seat(k as u8)));

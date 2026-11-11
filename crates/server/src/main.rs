@@ -90,6 +90,7 @@ pub fn router(state: Shared) -> Router {
         .route("/auth/dev", get(auth::dev_login))
         .route("/auth/logout", post(auth::logout))
         .route("/api/discord/token", post(auth::activity_token))
+        .route("/api/config", get(api::config))
         .route("/api/me", get(api::me))
         .route("/api/games", get(api::games))
         .route("/api/tables", get(api::tables).post(api::create_table))
