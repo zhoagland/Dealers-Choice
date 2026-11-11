@@ -212,6 +212,65 @@ pub fn order_from_button(button: Seat, num_seats: u8) -> Vec<Seat> {
         .collect()
 }
 
+/// A payment a seat owes outside the betting, e.g. a stun. The game decides where it goes
+/// (usually into the next pot).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Penalty {
+    pub seat: Seat,
+    pub amount: Chips,
+}
+
+/// How stuns are sized (owner decision OQ-9, `docs/tech/game-catalog.md` §3).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StunRule {
+    /// Cap for the first stunned player in a hand. House default $10.
+    pub base_cap: Chips,
+    /// How much higher each further stunned player's cap is, in the same hand. Picked by the
+    /// chooser (`Config::stun_step`); default $0.
+    pub step: Chips,
+}
+
+impl Default for StunRule {
+    fn default() -> StunRule {
+        StunRule {
+            base_cap: Chips(1_000),
+            step: Chips::ZERO,
+        }
+    }
+}
+
+/// What each stunned seat pays this hand: the pot, capped.
+///
+/// - The `k`-th stunned seat (k = 0, 1, …) is capped at `base_cap + k·step`.
+/// - **D-STUN-1:** every stun is measured against `pot_before` (the pot before this hand's
+///   stuns), not the pot growing as stuns are paid.
+/// - **D-STUN-2:** stunned seats are taken in order starting left of the dealer (`button`).
+/// - **D-G0-2:** a stun larger than the seat's stack takes the whole stack.
+///
+/// `stunned` is a bitmask over seats; `stacks[i]` is what seat `i` can pay.
+pub fn stun_amounts(
+    pot_before: Chips,
+    stunned: u16,
+    button: Seat,
+    stacks: &[Chips],
+    rule: StunRule,
+) -> Vec<Penalty> {
+    let n = stacks.len() as u8;
+    order_from_button(button, n)
+        .into_iter()
+        .filter(|s| stunned & (1 << s.0) != 0)
+        .enumerate()
+        .map(|(k, seat)| {
+            let cap = rule.base_cap + Chips(rule.step.0 * k as i64);
+            let amount = pot_before
+                .min(cap)
+                .min(stacks[seat.index()])
+                .max(Chips::ZERO);
+            Penalty { seat, amount }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,5 +495,35 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn stuns_are_the_pot_capped_rising_per_stunner_from_left_of_dealer() {
+        let rule = StunRule {
+            base_cap: Chips(1_000),
+            step: Chips(200),
+        };
+        let stacks = c(&[5_000, 5_000, 5_000, 5_000]);
+        // Button s2: order is s3, s0, s1. Stunned: s0, s1, s3. Pot $25.
+        let p = stun_amounts(Chips(2_500), 0b1011, Seat(2), &stacks, rule);
+        let got: Vec<(u8, i64)> = p.iter().map(|x| (x.seat.0, x.amount.0)).collect();
+        assert_eq!(got, vec![(3, 1_000), (0, 1_200), (1, 1_400)]);
+        // Small pot: everyone pays the pot measured before stuns (D-STUN-1), not a growing pot.
+        let p = stun_amounts(Chips(300), 0b1011, Seat(2), &stacks, rule);
+        assert!(p.iter().all(|x| x.amount == Chips(300)));
+        // Short stack pays what it has (D-G0-2).
+        let short = c(&[5_000, 150, 5_000, 5_000]);
+        let p = stun_amounts(Chips(2_500), 0b0010, Seat(0), &short, rule);
+        assert_eq!(
+            p,
+            vec![Penalty {
+                seat: Seat(1),
+                amount: Chips(150)
+            }]
+        );
+        // Default rule: flat $10 cap.
+        let p = stun_amounts(Chips(9_999), 0b0011, Seat(3), &stacks, StunRule::default());
+        assert!(p.iter().all(|x| x.amount == Chips(1_000)));
+        assert!(stun_amounts(Chips(500), 0, Seat(0), &stacks, rule).is_empty());
     }
 }

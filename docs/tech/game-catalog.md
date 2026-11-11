@@ -79,7 +79,9 @@ Engine work in G0, besides the trait:
   decks. **Done 2026-11-11.** Note for Bullet (G6): a dead joker leaves a 4-card hand, which the evaluators
   (5–7 cards) don't take yet.
 - `pot::Penalty { seat, amount }` and `stun_amounts(pot_before, stunned_in_order, base_cap, step)` per the
-  stun rule in §3 (cap $10, +$N per additional stunner in the same hand).
+  stun rule in §3 (cap $10, +$N per additional stunner in the same hand). **Done 2026-11-11:** `pot::Penalty`,
+  `pot::StunRule { base_cap, step }` (default $10 / $0) and `pot::stun_amounts(pot_before, stunned, button,
+  stacks, rule)` implementing D-STUN-1/2 and D-G0-2. Games expose `step` as `Config::stun_step` (chooser picks N).
 - Both-declaration fallback (OQ-3, owner decision): if every remaining contestant failed a Both declaration,
   the pot is **split evenly** among them (today it's split as hi/lo). Changes `pot::award_declared`; FTQ's
   `meta.version` bumps.
