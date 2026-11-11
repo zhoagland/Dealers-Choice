@@ -19,6 +19,12 @@ use engine::eval::high::eval_high;
 use engine::game::sample_hidden_hands;
 use engine::pot::{award_high, build_pots, order_from_button};
 use engine::replay::replay_interleaved;
+use engine::{AnalysisLabels, DecisionContext};
+
+use crate::analysis_util::{
+    POSTFLOP_STRENGTHS, PREFLOP_TIERS, board_texture, board_texture_names, holdem_class,
+    holdem_class_names, postflop_strength, preflop_tier, set,
+};
 use engine::view::{BoardView, CardSlot, PotView, SeatStatus, SeatView, TableView};
 use engine::{
     ActionClass, Card, CardSet, Chips, DetRng, Game, GameLength, GameMeta, HandSetup, HandValue,
@@ -572,6 +578,55 @@ impl Game for Holdem {
     }
     fn eval_unit(&self) -> Chips {
         self.config.big_blind
+    }
+
+    fn start_class(&self, s: &State, seat: Seat) -> Option<u16> {
+        let h = &s.hole[seat.index()];
+        (h.len() == 2).then(|| holdem_class(h[0], h[1]))
+    }
+
+    fn decision_context(&self, s: &State, seat: Seat) -> Option<DecisionContext> {
+        let h = &s.hole[seat.index()];
+        if h.len() < 2 {
+            return None;
+        }
+        let street = match s.street {
+            Street::Preflop => 0,
+            Street::Flop => 1,
+            Street::Turn => 2,
+            Street::River => 3,
+            Street::Done => return None,
+        };
+        let strength = if s.board.is_empty() {
+            preflop_tier(h[0], h[1])
+        } else {
+            let cat = eval_high(set(h).union(set(&s.board))).category();
+            postflop_strength(h, &s.board, cat)
+        };
+        Some(DecisionContext {
+            street,
+            board: board_texture(&s.board),
+            strength,
+            pot: s.betting.pot(),
+            street_committed: s.betting.street_committed(seat),
+        })
+    }
+
+    fn analysis_labels(&self) -> AnalysisLabels {
+        let (start_classes, start_grid) = holdem_class_names();
+        AnalysisLabels {
+            start_classes,
+            start_grid,
+            streets: ["preflop", "flop", "turn", "river"]
+                .map(String::from)
+                .to_vec(),
+            boards: board_texture_names(),
+            strengths: PREFLOP_TIERS
+                .iter()
+                .chain(&POSTFLOP_STRENGTHS)
+                .map(|s| s.to_string())
+                .collect(),
+        }
     }
 
     fn view(&self, obs: &Observation) -> TableView {

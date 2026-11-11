@@ -30,6 +30,7 @@ use engine::{
     ActionClass, Card, CardSet, Chips, DetRng, Game, GameLength, GameMeta, HandSetup, HandValue,
     HiddenSampler, IllegalAction, Rank, Seat, StakeModel, ToAct,
 };
+use engine::{AnalysisLabels, DecisionContext};
 use rand::Rng;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -633,6 +634,73 @@ impl Game for FollowTheQueen {
         Chips(100)
     }
 
+    /// Starting hand = the first three cards (two down, one up), ignoring wilds.
+    fn start_class(&self, s: &State, seat: Seat) -> Option<u16> {
+        let (down, up) = (&s.down[seat.index()], &s.up[seat.index()]);
+        if down.len() < 2 || up.is_empty() {
+            return None;
+        }
+        Some(ftq_start_class([down[0], down[1], up[0]]))
+    }
+
+    fn decision_context(&self, s: &State, seat: Seat) -> Option<DecisionContext> {
+        let street = match s.phase {
+            Phase::Betting(k) => k.checked_sub(3)?,
+            Phase::Declare => 5,
+            _ => return None,
+        };
+        let i = seat.index();
+        let all: CardSet = s.down[i].iter().chain(&s.up[i]).copied().collect();
+        let wild = s.wild.rank();
+        let wilds = all.iter().filter(|c| Some(c.rank()) == wild).count();
+        let naturals: CardSet = all.iter().filter(|c| Some(c.rank()) != wild).collect();
+        let board = match (s.wild, wilds) {
+            (Wild::None, _) => 0,
+            (Wild::AwaitingNextUpcard, _) => 1,
+            (Wild::Rank(_), 0) => 2,
+            (Wild::Rank(_), 1) => 3,
+            (Wild::Rank(_), _) => 4,
+        };
+        let strength = eval_high_wild(naturals, wilds).category() as u8;
+        Some(DecisionContext {
+            street,
+            board,
+            strength,
+            pot: s.betting.pot(),
+            street_committed: s.betting.street_committed(seat),
+        })
+    }
+
+    fn analysis_labels(&self) -> AnalysisLabels {
+        AnalysisLabels {
+            start_classes: FTQ_START_CLASSES.map(String::from).to_vec(),
+            start_grid: Vec::new(),
+            streets: [
+                "3rd street",
+                "4th street",
+                "5th street",
+                "6th street",
+                "7th street",
+                "declare",
+            ]
+            .map(String::from)
+            .to_vec(),
+            boards: [
+                "no wild yet",
+                "Queen showing, wild pending",
+                "wild set, you hold none",
+                "you hold 1 wild",
+                "you hold 2+ wilds",
+            ]
+            .map(String::from)
+            .to_vec(),
+            strengths: engine::Category::ALL
+                .iter()
+                .map(|c| c.to_string())
+                .collect(),
+        }
+    }
+
     fn view(&self, obs: &Observation) -> TableView {
         // Public numbers come from a determinization; its hidden cards are never shown.
         let s = self.determinize(
@@ -809,6 +877,47 @@ impl Game for FollowTheQueen {
             ("both", None) => Some(Action::Declare(Declare::Both)),
             _ => None,
         }
+    }
+}
+
+/// FTQ starting-hand classes (first three cards), in priority order.
+pub const FTQ_START_CLASSES: [&str; 8] = [
+    "rolled-up trips",
+    "high pair (T+)",
+    "low pair",
+    "three to a flush",
+    "three to a straight",
+    "three low (6 or under)",
+    "two high cards (T+)",
+    "other",
+];
+
+/// Class of a three-card stud start (ranks and suits only; wilds aren't known yet).
+pub fn ftq_start_class(cards: [Card; 3]) -> u16 {
+    use crate::analysis_util::{has_run, rank_index, rank_mask};
+    let r: Vec<usize> = cards.iter().map(|c| rank_index(c.rank())).collect();
+    let pair_rank = if r[0] == r[1] || r[0] == r[2] {
+        Some(r[0])
+    } else if r[1] == r[2] {
+        Some(r[1])
+    } else {
+        None
+    };
+    let low = |x: usize| x <= 4 || x == 12; // 2..=6, or an Ace
+    if r[0] == r[1] && r[1] == r[2] {
+        0
+    } else if let Some(p) = pair_rank {
+        if p >= 8 { 1 } else { 2 }
+    } else if cards.iter().all(|c| c.suit() == cards[0].suit()) {
+        3
+    } else if has_run(rank_mask(cards), 3) {
+        4
+    } else if r.iter().all(|&x| low(x)) {
+        5
+    } else if r.iter().filter(|&&x| x >= 8).count() >= 2 {
+        6
+    } else {
+        7
     }
 }
 
