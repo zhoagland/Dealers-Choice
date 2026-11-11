@@ -217,6 +217,11 @@ House conventions that are engine-level, not per-game:
 
 ### 5.8 Interfaces
 - **FR-UI-1** v1: CLI (`cli` crate, `clap`) for play, spot, sim, train.
+- **FR-UI-3** Saved profiles + TUI editor. Named **sim profiles** (`config/sims/<name>.toml`, a
+  `RunSpec`) and **play profiles** (`config/play/<name>.toml`: bots, think-ms, hints, review budget,
+  bankroll, game pool) are TOML files: readable, diffable, can be committed. `dc sim --profile <name>` /
+  `dc play --profile <name>` load them; explicit flags override profile fields. `dc config` opens a
+  terminal UI (ratatui) to list, create, copy, edit, validate, and delete profiles. Milestone M6.
 - **FR-UI-2** All engine I/O (observations, actions, events, evaluations) is `serde`-serializable.
   A later web server (WebSocket) is a transport adapter, not a rewrite.
 
@@ -289,7 +294,7 @@ House conventions that are engine-level, not per-game:
 | M3 | `sim` crate + instrumentation | Measured hands/s and bytes/hand per game and bot; storage format decided (FR-ST-2) |
 | M4 | Strength presets, coach (post-hand + live), spot analysis with ranges | Coach flags are stable across reruns with different seeds |
 | M5 | Follow the Queen driver | Plays house rules; written using only the "adding a game" guide (tests the guide) |
-| M6 | Storage + persistence (bankroll, sim output, blueprints) | Sessions survive restart; sim output queryable |
+| M6 | Storage + persistence (bankroll, sim output, blueprints); saved profiles + `dc config` TUI (FR-UI-3) | Sessions survive restart; sim output queryable; a profile made in the TUI runs with `--profile` |
 | M7 | Player analytics (FR-PA-1…4) | Stats and leak report reproduce known values on synthetic players with planted leaks (e.g. a bot that always calls the river) |
 | M8 | NPI → sustainment handoff: CI (fmt, clippy, tests per PR; nightly release-mode exhaustive + benchmark tests), sustainment handbook (architecture map, run/debug/replay, versioning and invalidation rules, release checklist, known limits, prioritized backlog), adding-a-game guide | Owner can add a game, change rules, cut a release, and diagnose a CI failure using only the docs |
 

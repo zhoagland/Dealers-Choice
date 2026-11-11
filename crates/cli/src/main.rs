@@ -6,6 +6,7 @@
 mod human;
 mod play;
 mod simulate;
+mod spot;
 mod tools;
 
 use clap::{Parser, Subcommand};
@@ -27,6 +28,8 @@ enum Command {
     Train(tools::TrainArgs),
     /// Measure a bot's exploitability (Kuhn / Leduc only).
     Exploit(tools::ExploitArgs),
+    /// Rank the actions in a described Hold'em spot, against opponent ranges.
+    Spot(spot::SpotArgs),
     /// Run a bot-vs-bot simulation.
     Sim(simulate::SimArgs),
     /// Measure throughput and data rate on fixed workloads.
@@ -40,6 +43,7 @@ fn main() {
         Command::Play(args) => play::run(args),
         Command::Train(args) => tools::train(args),
         Command::Exploit(args) => tools::exploit(args),
+        Command::Spot(args) => spot::run(args),
         Command::Sim(args) => simulate::sim(args),
         Command::BenchSim(args) => simulate::bench(args),
     };

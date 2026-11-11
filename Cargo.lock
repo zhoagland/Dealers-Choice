@@ -134,6 +134,7 @@ dependencies = [
  "games",
  "rand",
  "rayon",
+ "serde",
  "serde_json",
  "sim",
  "toml",
