@@ -166,8 +166,75 @@ fn backup(state: &AppState) {
     }
 }
 
+/// `dc-server --healthcheck`: exit 0 if this container's server answers `/healthz` (for
+/// Docker's HEALTHCHECK; the image has no curl).
+fn healthcheck() -> i32 {
+    use std::io::{Read, Write};
+    let bind = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".into());
+    let addr = bind.replace("0.0.0.0", "127.0.0.1");
+    let Ok(mut s) = std::net::TcpStream::connect(&addr) else {
+        return 1;
+    };
+    let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
+    if write!(
+        s,
+        "GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+    )
+    .is_err()
+    {
+        return 1;
+    }
+    let mut reply = String::new();
+    let _ = s.read_to_string(&mut reply);
+    if reply.starts_with("HTTP/1.1 200") {
+        0
+    } else {
+        1
+    }
+}
+
+/// `dc-server --backup <file>`: a consistent snapshot of the database (safe while the server
+/// runs), e.g. before a deploy.
+fn backup_once(path: Option<&String>) -> i32 {
+    let Some(path) = path else {
+        eprintln!("dc-server: --backup needs a file path");
+        return 2;
+    };
+    let root = std::env::var("DC_DATA_ROOT").unwrap_or_else(|_| "data".into());
+    let db = match Db::open(&PathBuf::from(root).join("dc.sqlite")) {
+        Ok(db) => db,
+        Err(e) => {
+            eprintln!("dc-server: database: {}", e.0);
+            return 1;
+        }
+    };
+    match db.backup_to(std::path::Path::new(path)) {
+        Ok(()) => {
+            println!("backed up to {path}");
+            0
+        }
+        Err(e) => {
+            eprintln!("dc-server: backup: {}", e.0);
+            1
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
+    // Maintenance commands for containers and deploy scripts (no web server started).
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        Some("--healthcheck") => std::process::exit(healthcheck()),
+        Some("--backup") => std::process::exit(backup_once(args.get(1))),
+        Some(other) => {
+            eprintln!(
+                "dc-server: unknown argument {other:?} (use --healthcheck or --backup <file>)"
+            );
+            std::process::exit(2);
+        }
+        None => {}
+    }
     let config = match Config::from_env() {
         Ok(c) => c,
         Err(e) => {

@@ -1,7 +1,8 @@
 # Deploying Dealers Choice (web)
 
-Status: built (`crates/server`, `web/`; `docs/tech/web.md`). Part 1 creates the Discord application, Part 2 puts
-the app on your server, Part 3 covers updates and backups, and the last part turns on play inside Discord.
+Status: built (`crates/server`, `web/`; `docs/tech/web.md`). Part 1 creates the Discord application, Part 2 sets
+up automatic deploys through your self-hosted GitHub runner (or by hand), Part 3 covers updates and backups, and
+Part 4 turns on play inside Discord.
 
 Plan decisions this guide follows: Discord sign-in only, only members of your Discord server may sign in
 (D-WEB-2), a Linux x86-64 server with Docker Compose, HTTPS by a bundled Caddy (OQ-11).
@@ -42,27 +43,63 @@ ADMIN_DISCORD_IDS=<your user id>[,<other admin id>]
 
 If the secret ever leaks: Developer Portal → OAuth2 → **Reset Secret**, update `.env`, restart the server.
 
-## Part 2 — Server and DNS
+## Part 2 — Automatic deploys from GitHub (your self-hosted runner)
 
-You need: a Linux x86-64 server with a public IP, a domain you control, and Docker.
+Every push to `main` runs CI on GitHub, then the **deploy** workflow (`.github/workflows/deploy.yml`) runs on your
+own server through a self-hosted GitHub Actions runner: it backs up the database, builds the image, restarts the
+app, checks that the new image is the one running, and smoke-tests it (health, page, sign-in required, no dev
+login). It never runs for pull requests, so unreviewed code can't execute on your server. You can also run it by
+hand: GitHub → Actions → deploy → **Run workflow**.
 
-1. **DNS:** add an `A` record for your domain (e.g. `poker.example.com`) pointing at the server's IP. Open ports
-   80 and 443 in the server's firewall; Caddy needs both to get the HTTPS certificate.
-2. **Docker:** install Docker Engine and the Compose plugin (<https://docs.docker.com/engine/install/>). Check
-   with `docker compose version`.
-3. **Code:** `git clone <this repo> dealers-choice && cd dealers-choice`.
-4. **Settings:** `cp deploy/.env.example deploy/.env`, then edit `deploy/.env`: set `DOMAIN` and `PUBLIC_URL` to
-   your domain and paste the four values from Part 1. Keep `DEV_MODE=0`. The server refuses to start without the
-   Discord values and `ALLOWED_GUILD_ID` (D-WEB-2).
-5. **Start:** `docker compose -f deploy/docker-compose.yml up -d --build`. The first build takes several
-   minutes (it compiles the Rust server and the web app).
-6. **Check:** open `https://<your-domain>/healthz` (it says `ok`), then `https://<your-domain>/`, sign in with
-   Discord, create a table and copy its invite link into your Discord channel.
-7. Logs: `docker compose -f deploy/docker-compose.yml logs -f app`.
+This follows the same pattern as your `engineering-gym` deploy on the Docker VM: one runner per repo, a label to
+target it, settings in a `.env` in your home directory, and the app on a local port. (Your website container
+already holds ports 80/443 on that VM, so the bundled Caddy stays off there.)
+
+### One-time setup on the server
+
+1. **Register a runner for this repo.** Runners are per repo, so the ones registered to `Web-Server` and
+   `engineering-gym` can't pick up this repo's jobs. On GitHub: this repo → **Settings → Actions → Runners → New
+   self-hosted runner → Linux x64**. On the VM, as the same user that runs the other runners (it must be in the
+   `docker` group), follow the page's *Download* commands in a new folder, then configure with the page's token
+   and our label:
+
+   ```bash
+   mkdir ~/actions-runner-dealers-choice && cd ~/actions-runner-dealers-choice
+   # …the page's curl + tar commands…
+   ./config.sh --url https://github.com/zhoagland/Dealers-choice --token <TOKEN FROM THE PAGE> \
+     --name DockerVM-dealers-choice --labels dealers-choice --unattended
+   sudo ./svc.sh install && sudo ./svc.sh start
+   ```
+
+   It shows as **Idle** under Settings → Actions → Runners when it's ready.
+2. **Settings file:** `mkdir -p ~/dealers-choice` and create `~/dealers-choice/.env` from `deploy/.env.example`:
+   `PUBLIC_URL`, the four Discord values from Part 1, and `DC_HTTP_PORT` (default 8090; pick a free port: the
+   gym uses 8088). `chmod 600 ~/dealers-choice/.env`. The workflow refuses to deploy with `DEV_MODE=1`.
+3. **Make it reachable** (pick one):
+   - **Cloudflare Tunnel** (no open ports; HTTPS by Cloudflare; WebSockets work): in Cloudflare Zero Trust →
+     Networks → Tunnels, create a tunnel, add a public hostname (e.g. `poker.yourdomain.com`) with service
+     `http://app:8080`, and put its token in `.env` as `CLOUDFLARE_TUNNEL_TOKEN=…` plus `DC_PROFILES=tunnel`.
+   - **Your existing reverse proxy:** forward the hostname to `127.0.0.1:<DC_HTTP_PORT>`, including WebSocket
+     upgrades on `/ws`.
+   - **A dedicated host** with nothing on 80/443: `DOMAIN=…` and `DC_PROFILES=caddy` (automatic Let's Encrypt).
+
+   Then set `PUBLIC_URL=https://<that hostname>` and add `https://<that hostname>/auth/discord/callback` as a
+   redirect in the Discord Developer Portal (Part 1).
+4. **Optional:** a repo secret `DISCORD_WEBHOOK` (a channel webhook URL) posts each deploy's result to Discord.
+5. **First deploy:** merge to `main` (or Actions → deploy → Run workflow). Watch it under Actions; when it's green,
+   open your hostname, sign in with Discord, create a table and share the invite link.
 
 Everyone starts with $100 of play money. As an admin (`ADMIN_DISCORD_IDS`) you get an **Admin** link in the lobby
 to deposit or reset bankrolls. The **settle** tab at a table shows each player's net result over the last 24
 hours, so the group can settle up outside the app; the app never moves real money.
+
+### Without the runner (by hand)
+
+On any Linux server with Docker: `git clone <this repo> dealers-choice && cd dealers-choice`,
+`cp deploy/.env.example deploy/.env` and fill it in, then
+`docker compose -f deploy/docker-compose.yml up -d --build` (add `--profile tunnel` or `--profile caddy`).
+For `caddy`, point an `A` record at the server and open ports 80 and 443. Check `https://<your-domain>/healthz`.
+Logs: `docker compose -f deploy/docker-compose.yml logs -f app`.
 
 ### Trying it on your own computer first
 
@@ -72,17 +109,21 @@ Or build once (`cd web && npm run build`) and open <http://localhost:8080> from 
 
 ## Part 3 — Updates and backups
 
-- **Update:** `git pull && docker compose -f deploy/docker-compose.yml up -d --build`. Restarting stops the
-  tables; when the server comes back, each table reopens and any game that was interrupted is paid back to the
-  start of the interrupted hand (table-stake stacks and carried pots go back to the players, D-WEB-6). Update
-  between games if you can.
-- **Backups:** the server writes a snapshot of its database every night to `/data/backups` inside the `dc-data`
-  volume and keeps the newest 7. To copy them out:
-  `docker compose -f deploy/docker-compose.yml cp app:/data/backups ./backups`.
-- **Restore a backup:** stop the app (`docker compose -f deploy/docker-compose.yml stop app`), copy the backup
-  over the live database (`docker compose -f deploy/docker-compose.yml cp ./backups/dc-dayNNNNNN.sqlite
-  app:/data/dc.sqlite`), then start it again (`... start app`).
-- If the client secret leaks, reset it (Part 1) and restart the app.
+- **Update:** push to `main` (the deploy workflow does the rest), or by hand
+  `git pull && docker compose -f deploy/docker-compose.yml up -d --build`. Restarting stops the tables; when the
+  server comes back, each table reopens and any game that was interrupted is paid back to the start of the
+  interrupted hand (table-stake stacks and carried pots go back to the players, D-WEB-6). Deploy between games if
+  you can.
+- **Backups:** every deploy first snapshots the database to `/data/backups/pre-deploy-<commit>.sqlite` (newest 10
+  kept), and the server writes a nightly snapshot there too (newest 7 kept). Take one any time with
+  `docker compose -p dealers-choice exec app dc-server --backup /data/backups/manual.sqlite`, and copy them out
+  with `docker compose -p dealers-choice cp app:/data/backups ./backups`.
+- **Restore a backup:** stop the app (`docker compose -p dealers-choice stop app`), copy the backup over the live
+  database (`docker compose -p dealers-choice cp ./backups/<file>.sqlite app:/data/dc.sqlite`), then start it
+  again (`docker compose -p dealers-choice start app`).
+- **Roll back a bad deploy:** revert the commit on `main` (the workflow redeploys), or Actions → deploy → Run
+  workflow on an older commit.
+- If the client secret leaks, reset it (Part 1), update `.env`, and re-run the deploy workflow.
 
 ## Part 4 — Play inside Discord (Activity, optional)
 

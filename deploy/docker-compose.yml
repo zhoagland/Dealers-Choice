@@ -1,29 +1,77 @@
-# Dealers Choice on your own server (deploy/README.md). Caddy gets HTTPS certificates for
-# $DOMAIN automatically and forwards to the app. Secrets live only in deploy/.env.
+# Dealers Choice on your own server (deploy/README.md).
 #
-#   cp deploy/.env.example deploy/.env   # then fill it in
+# By default only the app runs, on a local port (DC_HTTP_BIND:DC_HTTP_PORT, default
+# 127.0.0.1:8090), for a reverse proxy or tunnel you already have. Two optional profiles:
+#   --profile tunnel   Cloudflare Tunnel (HTTPS by Cloudflare; no open ports needed)
+#   --profile caddy    Caddy on ports 80/443 with automatic Let's Encrypt (dedicated host only)
+#
+# Settings come from an env file: deploy/.env when run by hand, or ~/dealers-choice/.env when
+# the GitHub deploy workflow runs it (COMPOSE_ENV_FILES). Secrets never live in the repo.
+#
 #   docker compose -f deploy/docker-compose.yml up -d --build
+name: dealers-choice
+
+x-hardening: &hardening
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: ["ALL"]
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "5" }
 
 services:
   app:
+    <<: *hardening
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    image: dealers-choice:latest
-    env_file: .env
+    image: dealers-choice:${DC_IMAGE_TAG:-local}
+    read_only: true
+    tmpfs: ["/tmp:size=32m"]
     environment:
+      PUBLIC_URL: ${PUBLIC_URL:?set PUBLIC_URL in .env}
+      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID:-}
+      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET:-}
+      ALLOWED_GUILD_ID: ${ALLOWED_GUILD_ID:-}
+      ADMIN_DISCORD_IDS: ${ADMIN_DISCORD_IDS:-}
+      DEV_MODE: ${DEV_MODE:-0}
       DC_DATA_ROOT: /data
       BIND_ADDR: 0.0.0.0:8080
     volumes:
       - dc-data:/data
-    restart: unless-stopped
+    ports:
+      - "${DC_HTTP_BIND:-127.0.0.1}:${DC_HTTP_PORT:-8090}:8080"
+    healthcheck:
+      test: ["CMD", "dc-server", "--healthcheck"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
     # Tables in progress are refunded to the start of the interrupted hand on restart (D-WEB-6).
     stop_grace_period: 30s
+    mem_limit: 512m
+    networks: [web]
+
+  cloudflared:
+    <<: *hardening
+    profiles: ["tunnel"]
+    image: cloudflare/cloudflared:2024.10.1
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      # Not `:?`: Compose interpolates profiled-out services too. cloudflared refuses to start
+      # without a token. In the Cloudflare dashboard, point the tunnel's public hostname at
+      # http://app:8080.
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on: [app]
+    networks: [web]
+    mem_limit: 128m
 
   caddy:
+    profiles: ["caddy"]
     image: caddy:2
     depends_on: [app]
-    env_file: .env
+    environment:
+      DOMAIN: ${DOMAIN:-}
     ports:
       - "80:80"
       - "443:443"
@@ -33,6 +81,10 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     restart: unless-stopped
+    networks: [web]
+
+networks:
+  web:
 
 volumes:
   dc-data:

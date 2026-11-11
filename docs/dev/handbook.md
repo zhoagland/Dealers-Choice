@@ -175,6 +175,7 @@ Every hand is reproducible from **(game id + version, setup, action log)**, chan
 | `test` (Linux + Windows) | every push/PR | all unit, conformance, and statistical tests | see below |
 | `web` | every push/PR | generated protocol samples and view gallery are current; `protocol.ts` fits them; the client builds | run `cargo test -p protocol -p server`, commit `web/src/generated`; fix `web/src/protocol.ts` to match the Rust types |
 | `docker` | tags `v*` | the deploy image builds | read the failing stage (node or cargo) |
+| `deploy` (`deploy.yml`) | push to `main`, or by hand | runs all of CI, then on the self-hosted runner (label `dealers-choice`): backup, build, restart, image check, smoke test | the job log, then the "Logs on failure" step; setup in `deploy/README.md` Part 2 |
 | `nightly` | 07:00 UTC daily, or manual | exhaustive 7-card eval, benchmarks, `bench-sim` table (artifact) | a real regression in eval or a big slowdown |
 
 Diagnosing `test` failures:
