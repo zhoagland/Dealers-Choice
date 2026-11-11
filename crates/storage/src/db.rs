@@ -10,7 +10,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 use engine::Chips;
 
 /// Migrations in order. `include_str!` compiles the SQL files into the binary.
-const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_init.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("../migrations/0001_init.sql"),
+    include_str!("../migrations/0002_web.sql"),
+];
 
 #[derive(Debug)]
 pub struct DbError(pub String);
@@ -285,6 +288,389 @@ impl Db {
             Ok((r.get(0)?, note))
         })?;
         Ok(rows.collect::<Result<_, _>>()?)
+    }
+}
+
+// ----- web app (schema v2, docs/tech/web.md §5, §7, §9) ----------------------------------------
+
+/// A signed-in web account.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Account {
+    pub id: i64,
+    pub discord_id: String,
+    pub name: String,
+    pub avatar: Option<String>,
+    pub is_admin: bool,
+    /// The ledger player behind this account.
+    pub player_id: i64,
+}
+
+/// A stored chat line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChatRow {
+    pub id: i64,
+    pub account_id: i64,
+    pub name: String,
+    pub text: String,
+    pub at: i64,
+}
+
+/// A web table row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WebTableRow {
+    pub id: String,
+    pub name: String,
+    pub host: i64,
+    pub settings: String,
+    pub session_id: i64,
+    pub refund: String,
+}
+
+/// A hand played at a web table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WebHandRow {
+    pub id: i64,
+    pub table_id: String,
+    pub game_id: String,
+    pub game_version: u32,
+    pub seats: String,
+    pub results: String,
+    pub record: Vec<u8>,
+    pub at: i64,
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
+impl Db {
+    /// Create or update the account for a Discord user; new accounts get a ledger player with an
+    /// opening deposit of `opening` (web.md §5: $100).
+    pub fn upsert_account(
+        &mut self,
+        discord_id: &str,
+        name: &str,
+        avatar: Option<&str>,
+        is_admin: bool,
+        opening: Chips,
+    ) -> DbResult<Account> {
+        let existing: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM account WHERE discord_id = ?1",
+                [discord_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let id = match existing {
+            Some(id) => {
+                self.conn.execute(
+                    "UPDATE account SET name = ?2, avatar = ?3, is_admin = ?4 WHERE id = ?1",
+                    params![id, name, avatar, is_admin],
+                )?;
+                id
+            }
+            None => {
+                self.conn.execute(
+                    "INSERT INTO account (discord_id, name, avatar, is_admin, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![discord_id, name, avatar, is_admin, now()],
+                )?;
+                let id = self.conn.last_insert_rowid();
+                let player = self.player(&format!("discord:{discord_id}"), opening)?;
+                self.conn.execute(
+                    "UPDATE player SET account_id = ?1 WHERE id = ?2",
+                    params![id, player],
+                )?;
+                id
+            }
+        };
+        self.account(id)?
+            .ok_or_else(|| DbError("account vanished".into()))
+    }
+
+    pub fn account(&self, id: i64) -> DbResult<Option<Account>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT a.id, a.discord_id, a.name, a.avatar, a.is_admin, p.id
+                 FROM account a JOIN player p ON p.account_id = a.id WHERE a.id = ?1",
+                [id],
+                |r| {
+                    Ok(Account {
+                        id: r.get(0)?,
+                        discord_id: r.get(1)?,
+                        name: r.get(2)?,
+                        avatar: r.get(3)?,
+                        is_admin: r.get(4)?,
+                        player_id: r.get(5)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    /// Store a sign-in session (hash of the cookie value) valid for `ttl_secs`.
+    pub fn create_web_session(
+        &mut self,
+        id_hash: &[u8],
+        account_id: i64,
+        ttl_secs: i64,
+    ) -> DbResult<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO web_session (id_hash, account_id, expires_at) VALUES (?1, ?2, ?3)",
+            params![id_hash, account_id, unix_now() + ttl_secs],
+        )?;
+        Ok(())
+    }
+
+    /// The account of a live session, sliding its expiry forward by `ttl_secs`.
+    pub fn web_session(&mut self, id_hash: &[u8], ttl_secs: i64) -> DbResult<Option<i64>> {
+        let now = unix_now();
+        let row: Option<(i64, i64)> = self
+            .conn
+            .query_row(
+                "SELECT account_id, expires_at FROM web_session WHERE id_hash = ?1",
+                [id_hash],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        match row {
+            Some((acc, exp)) if exp > now => {
+                self.conn.execute(
+                    "UPDATE web_session SET expires_at = ?2 WHERE id_hash = ?1",
+                    params![id_hash, now + ttl_secs],
+                )?;
+                Ok(Some(acc))
+            }
+            Some(_) => {
+                self.delete_web_session(id_hash)?;
+                Ok(None)
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub fn delete_web_session(&mut self, id_hash: &[u8]) -> DbResult<()> {
+        self.conn
+            .execute("DELETE FROM web_session WHERE id_hash = ?1", [id_hash])?;
+        Ok(())
+    }
+
+    pub fn create_web_table(
+        &mut self,
+        id: &str,
+        name: &str,
+        host: i64,
+        settings_json: &str,
+        session_id: i64,
+    ) -> DbResult<()> {
+        self.conn.execute(
+            "INSERT INTO web_table (id, name, host, settings, session_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, name, host, settings_json, session_id, now()],
+        )?;
+        Ok(())
+    }
+
+    /// Open tables, oldest first.
+    pub fn open_web_tables(&self) -> DbResult<Vec<WebTableRow>> {
+        let mut st = self.conn.prepare(
+            "SELECT id, name, host, settings, session_id, refund FROM web_table WHERE closed_at IS NULL ORDER BY created_at",
+        )?;
+        let rows = st.query_map([], |r| {
+            Ok(WebTableRow {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                host: r.get(2)?,
+                settings: r.get(3)?,
+                session_id: r.get(4)?,
+                refund: r.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// What to pay back if the server stops during the table's current game (D-WEB-6).
+    pub fn set_web_table_refund(&mut self, id: &str, refund_json: &str) -> DbResult<()> {
+        self.conn.execute(
+            "UPDATE web_table SET refund = ?2 WHERE id = ?1",
+            params![id, refund_json],
+        )?;
+        Ok(())
+    }
+
+    /// Every account with its bankroll (admin page).
+    pub fn accounts(&self) -> DbResult<Vec<(Account, Chips)>> {
+        let ids: Vec<i64> = {
+            let mut st = self.conn.prepare("SELECT id FROM account ORDER BY name")?;
+            let rows = st.query_map([], |r| r.get(0))?;
+            rows.collect::<Result<_, _>>()?
+        };
+        let mut out = Vec::new();
+        for id in ids {
+            if let Some(a) = self.account(id)? {
+                let b = self.bankroll(a.player_id)?;
+                out.push((a, b));
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn close_web_table(&mut self, id: &str) -> DbResult<()> {
+        self.conn.execute(
+            "UPDATE web_table SET closed_at = ?2 WHERE id = ?1",
+            params![id, now()],
+        )?;
+        Ok(())
+    }
+
+    pub fn add_chat(&mut self, table_id: &str, account_id: i64, text: &str) -> DbResult<i64> {
+        self.conn.execute(
+            "INSERT INTO chat (table_id, account_id, text, at) VALUES (?1, ?2, ?3, ?4)",
+            params![table_id, account_id, text, unix_now()],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// The last `limit` visible chat lines of a table from the last 30 days, oldest first.
+    pub fn chat(&self, table_id: &str, limit: usize) -> DbResult<Vec<ChatRow>> {
+        let mut st = self.conn.prepare(
+            "SELECT c.id, c.account_id, a.name, c.text, c.at FROM chat c JOIN account a ON a.id = c.account_id
+             WHERE c.table_id = ?1 AND c.deleted = 0 AND c.at > ?2 ORDER BY c.id DESC LIMIT ?3",
+        )?;
+        let rows = st.query_map(
+            params![table_id, unix_now() - 30 * 86_400, limit as i64],
+            |r| {
+                Ok(ChatRow {
+                    id: r.get(0)?,
+                    account_id: r.get(1)?,
+                    name: r.get(2)?,
+                    text: r.get(3)?,
+                    at: r.get(4)?,
+                })
+            },
+        )?;
+        let mut out: Vec<ChatRow> = rows.collect::<Result<_, _>>()?;
+        out.reverse();
+        Ok(out)
+    }
+
+    pub fn delete_chat(&mut self, id: i64) -> DbResult<()> {
+        self.conn
+            .execute("UPDATE chat SET deleted = 1 WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    pub fn store_web_hand(
+        &mut self,
+        table_id: &str,
+        game_id: &str,
+        game_version: u32,
+        seats_json: &str,
+        results_json: &str,
+        record: &[u8],
+    ) -> DbResult<i64> {
+        self.conn.execute(
+            "INSERT INTO web_hand (table_id, game_id, game_version, seats, results, record, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![table_id, game_id, game_version, seats_json, results_json, record, unix_now()],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Hands of a table, newest first.
+    pub fn web_hands(&self, table_id: &str, limit: usize) -> DbResult<Vec<WebHandRow>> {
+        let mut st = self.conn.prepare(
+            "SELECT id, table_id, game_id, game_version, seats, results, record, at FROM web_hand
+             WHERE table_id = ?1 ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = st.query_map(params![table_id, limit as i64], web_hand_row)?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Hands an account played, newest first.
+    pub fn web_hands_for(&self, account_id: i64, limit: usize) -> DbResult<Vec<WebHandRow>> {
+        let mut st = self.conn.prepare(
+            "SELECT id, table_id, game_id, game_version, seats, results, record, at FROM web_hand w
+             WHERE EXISTS (SELECT 1 FROM json_each(w.seats) WHERE value = ?1) ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = st.query_map(params![account_id, limit as i64], web_hand_row)?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    pub fn web_hand(&self, id: i64) -> DbResult<Option<WebHandRow>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id, table_id, game_id, game_version, seats, results, record, at FROM web_hand WHERE id = ?1",
+                [id],
+                web_hand_row,
+            )
+            .optional()?)
+    }
+
+    /// A consistent snapshot of the whole database (nightly backups, web.md §9).
+    pub fn backup_to(&self, path: &Path) -> DbResult<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| DbError(e.to_string()))?;
+        }
+        let _ = std::fs::remove_file(path);
+        self.conn
+            .execute("VACUUM INTO ?1", [path.to_string_lossy().to_string()])?;
+        Ok(())
+    }
+}
+
+fn web_hand_row(r: &rusqlite::Row) -> rusqlite::Result<WebHandRow> {
+    Ok(WebHandRow {
+        id: r.get(0)?,
+        table_id: r.get(1)?,
+        game_id: r.get(2)?,
+        game_version: r.get(3)?,
+        seats: r.get(4)?,
+        results: r.get(5)?,
+        record: r.get(6)?,
+        at: r.get(7)?,
+    })
+}
+
+#[cfg(test)]
+mod web_tests {
+    use super::*;
+
+    #[test]
+    fn accounts_sessions_chat_and_hands() {
+        let mut db = Db::in_memory().unwrap();
+        assert_eq!(db.schema_version().unwrap(), 2);
+        let a = db
+            .upsert_account("123", "Ann", None, true, Chips(10_000))
+            .unwrap();
+        assert_eq!(db.bankroll(a.player_id).unwrap(), Chips(10_000));
+        let again = db
+            .upsert_account("123", "Ann B", Some("abc"), true, Chips(10_000))
+            .unwrap();
+        assert_eq!(again.id, a.id);
+        assert_eq!(
+            db.bankroll(a.player_id).unwrap(),
+            Chips(10_000),
+            "no second deposit"
+        );
+        db.create_web_session(b"h", a.id, 100).unwrap();
+        assert_eq!(db.web_session(b"h", 100).unwrap(), Some(a.id));
+        db.delete_web_session(b"h").unwrap();
+        assert_eq!(db.web_session(b"h", 100).unwrap(), None);
+        let s = db.start_session(1).unwrap();
+        db.create_web_table("t1", "Friday", a.id, "{}", s).unwrap();
+        assert_eq!(db.open_web_tables().unwrap().len(), 1);
+        let c = db.add_chat("t1", a.id, "hi").unwrap();
+        assert_eq!(db.chat("t1", 10).unwrap()[0].text, "hi");
+        db.delete_chat(c).unwrap();
+        assert!(db.chat("t1", 10).unwrap().is_empty());
+        let h = db
+            .store_web_hand("t1", "ftq", 2, "[1,null]", "[100,-100]", b"rec")
+            .unwrap();
+        assert_eq!(db.web_hand(h).unwrap().unwrap().record, b"rec");
+        assert_eq!(db.web_hands("t1", 5).unwrap().len(), 1);
     }
 }
 
