@@ -806,7 +806,7 @@ fn scare_a_moosh_declarer_who_loses_is_stunned() {
     // s1 names high poker at $1 with junk; s0 has aces and is in.
     let deal = ["2c", "Ac", "7d", "Ad", "9h", "Ah", "Js", "Kc", "4d", "Kd"];
     let mut s = carry_hand(&g, &ScriptCarry::default(), &deal);
-    g.apply(&mut s, Action::Name(1 + 0 * 4 + 1)); // s1: high poker, $1
+    g.apply(&mut s, Action::Name(2)); // s1: high poker (game 0), price 2 × 50¢
     g.apply(&mut s, Action::InOut(1)); // s1 (declarer) in
     g.apply(&mut s, Action::InOut(1)); // s0 in
     g.apply(&mut s, Action::Draw(0));
