@@ -151,7 +151,9 @@ show down". A game is a `Script` in `script/games.rs`: its steps (`Down`, `Up`, 
 `Ranking::{High, LowA6, Low27, Badugi, ShortDeck, SpadeHigh, SpadeLow, HighCard}`), who opens betting
 (`LeftOfButton`, `BestBoard`, `LowBoard`) and what each seat sees (`Normal`, `Indian`, `Showtime`).
 Pots go through `engine::pot::award_shares`; declarations map to `Claim`s. Determinization replays
-the public events with sampled hidden cards (draws included). Every game id is in
+the public events with sampled hidden cards (draws included). D-DRAW-1: when the stock runs out the
+discards are reshuffled (a public event); determinization then links each recycled deal to a card
+thrown away before it. Variations are named `Variant`s switched on with `variants = ["…"]`. Every game id is in
 `script::games::SCRIPTED_IDS` and the registry.
 
 Shared rules: D-ALL-1 money (chooser's $2 dealer ante, spread 50¢–$2, 4 bets/street; `structure =
@@ -177,6 +179,16 @@ showdown, burns not modelled. **D-HE-1** Hold'em variants play best five of hole
 | `chicago_low` | Chicago Low | stud | high + lowest spade half | D-CHI-1/2 (owner) |
 | `indian_poker` | Indian Poker | 1 card on your forehead, 1 bet | high card | D-IP-1 |
 | `holdem_indian` | Indian Texas Hold'em | Hold'em, hole cards seen by all but you | high | |
+| `draw5` | 5 Card Draw | 5 down, 1 draw (up to 5) | high | D-5CD-1, D-DRAW-1 |
+| `triple_draw` | Triple Draw | 3 draws | A-6 low | D-DRAW-1 |
+| `draw27_single` | 2-7 Single Draw | 1 draw | 2-7 low | D-DRAW-1 |
+| `draw27_triple` | 2-7 Triple Draw | 3 draws | 2-7 low | D-DRAW-1 |
+| `badugi` | Badugi | 4 down, 3 draws | Badugi | D-BAD-1 |
+| `three_blind_mice` | 3 Blind Mice | draw 3 (4 with a shown Ace), 3-card board | high, best 5 of 8 | D-3BM-1, `flip_one_at_a_time` |
+| `crazy_pineapple` | Crazy Pineapple | 3 down, discard 1 after the flop | high | D-CP-1 |
+| `mamas_favorite` | Mama's Favorite | 6 down in 3 secret pairs, throw a pair after flop and turn | high | D-MF-1 |
+| `holdem_swap` | Swap Hold'em | swap 1-2 cards instead of folding | high | D-SW-1 (owner) |
+| `fusion` | Fusion | Hold'em + a hole card after flop and turn | high | D-FU-1, `hi_lo` |
 
 ## Open questions
 - ~~G-1~~ Resolved: FTQ max 7 seats.

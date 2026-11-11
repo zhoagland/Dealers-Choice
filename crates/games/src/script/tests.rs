@@ -228,3 +228,175 @@ fn razz_lowest_board_acts_first() {
     }
     assert_eq!(g.to_act(&s), ToAct::Seat(Seat(2)));
 }
+
+#[test]
+fn full_draw_tables_reshuffle_and_pass_conformance() {
+    // 8 seats × 5 cards leaves 12 in the stock: random draws run out and reshuffle (D-DRAW-1),
+    // which exercises the reshuffle path of `determinize`.
+    for id in ["triple_draw", "draw27_triple", "draw5", "badugi"] {
+        let g = game(id);
+        let max = *g.meta().seats.end();
+        check_conformance(
+            &g,
+            &Conformance {
+                hands: 25,
+                seat_counts: vec![max],
+                determinizations: 2,
+                ..Conformance::default()
+            },
+        );
+    }
+}
+
+#[test]
+fn reshuffles_happen_at_full_triple_draw_tables() {
+    use engine::rng::{Stream, derive_rng};
+    use rand::seq::IndexedRandom;
+    let g = game("triple_draw");
+    let mut seen = 0;
+    for hand in 0..30 {
+        let setup = HandSetup::simple(8, Chips(10_000));
+        let mut s = g.new_hand(&setup);
+        let mut rng = derive_rng(5, hand, Stream::Deal);
+        let mut legal = Vec::new();
+        while g.to_act(&s) != ToAct::Terminal {
+            let a = match g.to_act(&s) {
+                ToAct::Chance => g.sample_chance(&s, &mut rng),
+                _ => {
+                    g.legal_actions(&s, &mut legal);
+                    // Never fold; draw a lot.
+                    *legal
+                        .iter()
+                        .filter(|a| !matches!(a, Action::Fold))
+                        .collect::<Vec<_>>()
+                        .choose(&mut rng)
+                        .unwrap()
+                        .to_owned()
+                }
+            };
+            g.apply(&mut s, a);
+        }
+        if !s.reshuffles.is_empty() {
+            seen += 1;
+        }
+    }
+    assert!(seen > 0, "expected at least one reshuffle");
+}
+
+#[test]
+fn every_variant_passes_conformance() {
+    for &id in SCRIPTED_IDS {
+        for v in game(id).script().variants.clone() {
+            let g = Scripted::new(Config {
+                game: id.into(),
+                variants: vec![v.name.into()],
+                ..Config::default()
+            });
+            check_conformance(
+                &g,
+                &Conformance {
+                    hands: 20,
+                    seat_counts: vec![3],
+                    determinizations: 2,
+                    ..Conformance::default()
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn ace_bonus_draws_four_and_shows_the_ace() {
+    let g = game("three_blind_mice");
+    let setup = HandSetup::simple(2, Chips(10_000));
+    let mut s = g.new_hand(&setup);
+    // s1: Ah 2c 3d 4h 5s ; s0: Kc Kd Qc Qd Jc
+    for c in ["Ah", "Kc", "2c", "Kd", "3d", "Qc", "4h", "Qd", "5s", "Jc"] {
+        g.apply(&mut s, Action::Deal(card(c)));
+    }
+    g.apply(&mut s, Action::CheckCall);
+    g.apply(&mut s, Action::CheckCall);
+    // s1 throws away four, keeping the Ace (position 0).
+    assert!(g.validate(&s, Action::Draw(0b11110)).is_ok());
+    g.apply(&mut s, Action::Draw(0b11110));
+    let obs = g.observe(&s, Seat(0));
+    assert!(
+        obs.history
+            .contains(&Event::Drew(Seat(1), 4, Some(card("Ah"))))
+    );
+    assert!(!s.betting.is_folded(Seat(1)));
+    // s0 throws four keeping a King: the King is shown and the hand is fouled (D-3BM-1).
+    g.apply(&mut s, Action::Draw(0b11110));
+    assert!(s.betting.is_folded(Seat(0)));
+    assert!(
+        g.observe(&s, Seat(1))
+            .history
+            .contains(&Event::Drew(Seat(0), 4, Some(card("Kc"))))
+    );
+}
+
+#[test]
+fn mamas_favorite_throws_whole_pairs() {
+    let g = game("mamas_favorite");
+    let setup = HandSetup::simple(2, Chips(10_000));
+    let mut s = g.new_hand(&setup);
+    for c in [
+        "Ah", "Kc", "2c", "Kd", "3d", "Qc", "4h", "Qd", "5s", "Jc", "6s", "Jd",
+    ] {
+        g.apply(&mut s, Action::Deal(card(c)));
+    }
+    let mut legal = Vec::new();
+    g.legal_actions(&s, &mut legal);
+    assert_eq!(legal.len(), 15, "15 ways to split six cards into pairs");
+    g.apply(&mut s, Action::Arrange(0));
+    g.apply(&mut s, Action::Arrange(0));
+    g.apply(&mut s, Action::CheckCall);
+    g.apply(&mut s, Action::CheckCall);
+    for c in ["7c", "8c", "9c"] {
+        g.apply(&mut s, Action::Deal(card(c)));
+    }
+    g.legal_actions(&s, &mut legal);
+    assert_eq!(
+        legal,
+        vec![
+            Action::Draw(0b11),
+            Action::Draw(0b1100),
+            Action::Draw(0b110000)
+        ]
+    );
+}
+
+#[test]
+fn swap_instead_of_fold() {
+    let g = game("holdem_swap");
+    let setup = HandSetup::simple(2, Chips(10_000));
+    let mut s = g.new_hand(&setup);
+    for c in ["Ah", "2c", "Kd", "7d"] {
+        g.apply(&mut s, Action::Deal(card(c)));
+    }
+    let mut legal = Vec::new();
+    // s1 opens with a bet: no swaps (nothing to fold to).
+    g.legal_actions(&s, &mut legal);
+    assert!(!legal.iter().any(|a| matches!(a, Action::Swap(_))));
+    let bet = *legal
+        .iter()
+        .find(|a| matches!(a, Action::RaiseTo(_)))
+        .unwrap();
+    g.apply(&mut s, bet);
+    // s0 faces a bet: may swap 1 or 2 cards (3 masks) instead of folding.
+    g.legal_actions(&s, &mut legal);
+    let swaps: Vec<_> = legal
+        .iter()
+        .filter(|a| matches!(a, Action::Swap(_)))
+        .collect();
+    assert_eq!(swaps.len(), 3);
+    g.apply(&mut s, Action::Swap(0b01));
+    assert_eq!(g.to_act(&s), ToAct::Chance, "replacement card comes next");
+    g.apply(&mut s, Action::Deal(card("As")));
+    assert_eq!(s.down[0].as_slice(), &[card("7d"), card("As")]);
+    assert_eq!(
+        s.betting.street_committed(Seat(0)),
+        s.betting.street_committed(Seat(1)),
+        "called"
+    );
+}

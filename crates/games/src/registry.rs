@@ -41,6 +41,16 @@ pub const GAME_IDS: &[&str] = &[
     "chicago_low",
     "indian_poker",
     "holdem_indian",
+    "draw5",
+    "triple_draw",
+    "draw27_single",
+    "draw27_triple",
+    "badugi",
+    "three_blind_mice",
+    "crazy_pineapple",
+    "mamas_favorite",
+    "holdem_swap",
+    "fusion",
 ];
 
 /// Build game `id` from `config` (a TOML table of that game's `Config`; `None` = defaults)
