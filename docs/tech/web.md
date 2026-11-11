@@ -226,3 +226,29 @@ check; per-connection and per-account rate limits; message size cap (16 KB); inp
 | W6 | Every game family's `view()` in the gallery; optional `/reports` for sim reports | Each catalog family PR adds its games to the gallery |
 
 W1 starts after G0 (it needs `view()`). After that, web work runs in parallel with the game families and sims.
+
+## 13. Discord Activity (proposed 2026-11-11, owner to decide)
+
+Owner question: "is it possible to play the app in Discord too as a live activity?" Yes. A Discord **Activity**
+is a web app that Discord shows in an iframe inside a voice channel (desktop, browser and mobile clients). People
+in the call press the Activities button, pick the app, and play together without leaving Discord. Our planned app
+(React page + axum server + Discord login) is already that kind of app, so this is a second entry point, not a
+second app.
+
+What changes (verify against Discord's current Embedded App SDK docs when building):
+- **Same Discord application** as sign-in (`deploy/README.md` Part 1). In the Developer Portal enable
+  Activities and add a URL mapping from `/` to our domain. Discord serves the page from
+  `<app-id>.discordsays.com` and proxies every request; the page can't call other origins directly.
+- **Front end:** add `@discord/embedded-app-sdk`. When the page detects it's inside Discord it uses the SDK's
+  `authorize` → our server exchanges the code (`POST /api/discord/token`, client secret stays server-side) →
+  `authenticate`. Outside Discord, the normal OAuth redirect flow (§5) is unchanged.
+- **Auth transport:** cookies inside Discord's iframe are third-party and unreliable, so inside an Activity the
+  session token travels in an `Authorization` header and on the WebSocket connect message instead of the cookie.
+- **Tables:** one table per Activity instance (`sdk.instanceId`), so everyone who joins the Activity in that voice
+  channel lands at the same table automatically; the lobby is skipped. The allowlist still applies.
+- **Layout:** the iframe can be small (a tile in the call, or a phone). The mobile-first table (§8) already
+  targets 375 px; add a check at Discord's minimum sizes.
+- **Nice extras (later):** show who's in the voice channel as invitees; Rich Presence ("Playing Follow the Queen").
+
+Cost: roughly one milestone (**W7**) after W3, since auth, tables and the UI are reused. Risks: Discord's proxy and
+CSP rules (all asset and WebSocket URLs must be relative so they go through the mapping) and SDK changes.
