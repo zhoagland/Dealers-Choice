@@ -3,6 +3,9 @@
 //! Representation (see `docs/tech/engine.md` §3):
 //! - [`Card`] is one byte: `suit * 16 + rank`, with rank 0 = Two … 12 = Ace.
 //! - [`CardSet`] is a `u64` bitmask: bit `i` is set when `Card(i)` is in the set.
+//! - The two jokers (API v2, catalog K3) live in unused rank slots: red = 13, black = 29. Being
+//!   outside every suit's 13 rank bits, they are invisible to [`CardSet::rank_mask`], so the
+//!   evaluators never see a joker unless a game counts it as wild ([`CardSet::split_wild`]).
 //!
 //! Each suit occupies its own 16-bit "lane" of the `u64` (only 13 of the 16 bits are used).
 //! This makes "which ranks do I hold in hearts?" a single shift-and-mask
@@ -174,22 +177,46 @@ impl Card {
         Card((suit as u8) * 16 + rank as u8)
     }
 
+    /// The red joker (index 13). Only games that deal from [`Deck::with_jokers`] /
+    /// [`CardSet::FULL_DECK_WITH_JOKERS`] ever see one.
+    pub const RED_JOKER: Card = Card(13);
+    /// The black joker (index 29).
+    pub const BLACK_JOKER: Card = Card(29);
+
+    pub const fn is_joker(self) -> bool {
+        self.0 == 13 || self.0 == 29
+    }
+
+    /// The rank. **Panics for a joker**, which has none: check [`Card::is_joker`] first, or use
+    /// [`Card::try_rank`].
     pub const fn rank(self) -> Rank {
         Rank::ALL[(self.0 & 0x0F) as usize]
     }
 
+    /// The suit. A joker reports the suit lane it's stored in, which means nothing: check
+    /// [`Card::is_joker`] first.
     pub const fn suit(self) -> Suit {
         Suit::ALL[(self.0 >> 4) as usize]
     }
 
-    /// The packed byte, 0..=60. Not contiguous: indices 13–15, 29–31, 45–47 are unused.
+    /// `None` for a joker.
+    pub const fn try_rank(self) -> Option<Rank> {
+        if self.is_joker() {
+            None
+        } else {
+            Some(self.rank())
+        }
+    }
+
+    /// The packed byte, 0..=60. Not contiguous: indices 14–15, 30–31, 45–47 are unused (13 and
+    /// 29 are the jokers).
     pub const fn index(self) -> u8 {
         self.0
     }
 
     /// Inverse of [`Card::index`]. `None` for bytes that aren't a card.
     pub const fn from_index(i: u8) -> Option<Card> {
-        if (i & 0x0F) < 13 && (i >> 4) < 4 {
+        if ((i & 0x0F) < 13 && (i >> 4) < 4) || i == 13 || i == 29 {
             Some(Card(i))
         } else {
             None
@@ -216,10 +243,14 @@ impl TryFrom<u8> for Card {
     }
 }
 
-/// Prints as `"As"`, `"Td"`, `"2c"`.
+/// Prints as `"As"`, `"Td"`, `"2c"`; jokers as `"RJ"` / `"BJ"`.
 impl fmt::Display for Card {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}{}", self.rank().to_char(), self.suit().to_char())
+        match *self {
+            Card::RED_JOKER => write!(f, "RJ"),
+            Card::BLACK_JOKER => write!(f, "BJ"),
+            _ => write!(f, "{}{}", self.rank().to_char(), self.suit().to_char()),
+        }
     }
 }
 
@@ -230,11 +261,18 @@ impl fmt::Debug for Card {
     }
 }
 
-/// Parses `"As"`, `"td"`, `"2C"`. Implementing `FromStr` is what makes `"As".parse::<Card>()` work.
+/// Parses `"As"`, `"td"`, `"2C"`, and the jokers `"RJ"` / `"BJ"` (any case). Implementing
+/// `FromStr` is what makes `"As".parse::<Card>()` work.
 impl FromStr for Card {
     type Err = ParseCardError;
 
     fn from_str(s: &str) -> Result<Card, ParseCardError> {
+        if s.eq_ignore_ascii_case("RJ") {
+            return Ok(Card::RED_JOKER);
+        }
+        if s.eq_ignore_ascii_case("BJ") {
+            return Ok(Card::BLACK_JOKER);
+        }
         let mut chars = s.chars();
         // Pattern-match exactly two characters. Anything else falls to the error arm.
         match (chars.next(), chars.next(), chars.next()) {
@@ -255,7 +293,7 @@ impl fmt::Display for ParseCardError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "invalid card {:?}: expected rank (2-9,T,J,Q,K,A) then suit (c,d,h,s)",
+            "invalid card {:?}: expected rank (2-9,T,J,Q,K,A) then suit (c,d,h,s), or RJ/BJ",
             self.0
         )
     }
@@ -297,6 +335,12 @@ impl CardSet {
     /// All 52 cards.
     pub const FULL_DECK: CardSet =
         CardSet(RANK_BITS | (RANK_BITS << 16) | (RANK_BITS << 32) | (RANK_BITS << 48));
+
+    /// The two jokers.
+    pub const JOKERS: CardSet = CardSet((1 << 13) | (1 << 29));
+
+    /// 54 cards: the full deck plus both jokers.
+    pub const FULL_DECK_WITH_JOKERS: CardSet = CardSet(CardSet::FULL_DECK.0 | CardSet::JOKERS.0);
 
     pub const fn contains(self, card: Card) -> bool {
         self.0 & card.bit() != 0
@@ -348,6 +392,15 @@ impl CardSet {
         ((self.0 >> (16 * suit as u32)) & RANK_BITS) as u16
     }
 
+    /// Split a hand for the wild-card evaluators: `(naturals, wild count)`. Cards in `wild` are
+    /// wild (a game puts jokers here when they're wild, plus e.g. queens in FTQ). A joker that
+    /// isn't in `wild` is **dead**: it counts as neither (Bullet's face-up joker).
+    pub const fn split_wild(self, wild: CardSet) -> (CardSet, usize) {
+        let wilds = self.0 & wild.0;
+        let naturals = self.0 & !wild.0 & !CardSet::JOKERS.0;
+        (CardSet(naturals), wilds.count_ones() as usize)
+    }
+
     /// Cards in ascending index order (all clubs, then diamonds, …).
     pub fn iter(self) -> CardSetIter {
         CardSetIter(self.0)
@@ -363,9 +416,9 @@ impl From<CardSet> for u64 {
 impl TryFrom<u64> for CardSet {
     type Error = InvalidCardSetBits;
 
-    /// Rejects masks with bits outside the 52 valid card positions.
+    /// Rejects masks with bits outside the 54 valid card positions.
     fn try_from(bits: u64) -> Result<CardSet, InvalidCardSetBits> {
-        if bits & !CardSet::FULL_DECK.0 == 0 {
+        if bits & !CardSet::FULL_DECK_WITH_JOKERS.0 == 0 {
             Ok(CardSet(bits))
         } else {
             Err(InvalidCardSetBits(bits))
@@ -379,7 +432,7 @@ pub struct InvalidCardSetBits(pub u64);
 
 impl fmt::Display for InvalidCardSetBits {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:#018x} has bits outside the 52 card positions", self.0)
+        write!(f, "{:#018x} has bits outside the 54 card positions", self.0)
     }
 }
 
@@ -469,6 +522,20 @@ impl Deck {
         }
     }
 
+    /// All 54 cards (52 + both jokers) in a fixed order.
+    pub fn new_ordered_with_jokers() -> Deck {
+        Deck {
+            cards: CardSet::FULL_DECK_WITH_JOKERS.iter().collect(),
+        }
+    }
+
+    /// A fresh 54-card deck with both jokers, shuffled.
+    pub fn with_jokers(rng: &mut DetRng) -> Deck {
+        let mut deck = Deck::new_ordered_with_jokers();
+        deck.shuffle(rng);
+        deck
+    }
+
     /// A fresh 52-card deck, shuffled.
     pub fn shuffled(rng: &mut DetRng) -> Deck {
         let mut deck = Deck::new_ordered();
@@ -552,8 +619,9 @@ mod tests {
     #[test]
     fn every_valid_index_is_a_distinct_card_and_others_are_rejected() {
         let valid: Vec<Card> = (0..=u8::MAX).filter_map(Card::from_index).collect();
-        assert_eq!(valid.len(), 52);
-        assert_eq!(Card::from_index(13), None); // first unused slot in the clubs lane
+        assert_eq!(valid.len(), 54, "52 cards + 2 jokers");
+        assert_eq!(Card::from_index(13), Some(Card::RED_JOKER));
+        assert_eq!(Card::from_index(14), None); // first unused slot in the clubs lane
         assert_eq!(Card::from_index(64), None); // past the last lane
     }
 
@@ -653,8 +721,8 @@ mod tests {
 
     #[test]
     fn serde_rejects_invalid_values() {
-        assert!(Card::try_from(13u8).is_err());
-        assert!(CardSet::try_from(1u64 << 13).is_err());
+        assert!(Card::try_from(14u8).is_err());
+        assert!(CardSet::try_from(1u64 << 14).is_err());
         assert!(CardSet::try_from(u64::from(CardSet::FULL_DECK)).is_ok());
     }
 
@@ -708,5 +776,75 @@ mod tests {
                 "{card}: {c} vs {expected}"
             );
         }
+    }
+
+    #[test]
+    fn jokers_parse_print_and_round_trip() {
+        for (txt, j) in [("RJ", Card::RED_JOKER), ("bj", Card::BLACK_JOKER)] {
+            let c: Card = txt.parse().unwrap();
+            assert_eq!(c, j);
+            assert!(c.is_joker() && c.try_rank().is_none());
+            assert_eq!(c.to_string(), txt.to_ascii_uppercase());
+            assert_eq!(Card::from_index(c.index()), Some(c));
+            // Serde goes through u8 + `try_from`, so this is the stored form.
+            assert_eq!(Card::try_from(u8::from(c)), Ok(c));
+        }
+        assert!(!"As".parse::<Card>().unwrap().is_joker());
+        // Every other unused slot is still invalid.
+        let valid = (0..=255u8)
+            .filter(|&i| Card::from_index(i).is_some())
+            .count();
+        assert_eq!(valid, 54);
+    }
+
+    #[test]
+    fn jokers_are_outside_every_rank_mask() {
+        let s = CardSet::JOKERS;
+        assert_eq!(s.len(), 2);
+        for suit in Suit::ALL {
+            assert_eq!(s.rank_mask(suit), 0);
+        }
+        assert_eq!(CardSet::FULL_DECK_WITH_JOKERS.len(), 54);
+        assert!(CardSet::FULL_DECK.is_disjoint(CardSet::JOKERS));
+        let bits: u64 = CardSet::FULL_DECK_WITH_JOKERS.into();
+        assert!(CardSet::try_from(bits).is_ok());
+        assert!(CardSet::try_from(1u64 << 14).is_err());
+    }
+
+    #[test]
+    fn split_wild_counts_wild_jokers_and_drops_dead_ones() {
+        let hand: CardSet = ["As", "Ks", "Qd", "RJ", "BJ"]
+            .iter()
+            .map(|c| c.parse::<Card>().unwrap())
+            .collect();
+        let queens: CardSet = Suit::ALL
+            .iter()
+            .map(|&s| Card::new(Rank::Queen, s))
+            .collect();
+        // Jokers and queens wild.
+        let (nat, w) = hand.split_wild(CardSet::JOKERS.union(queens));
+        assert_eq!((nat.len(), w), (2, 3));
+        // Only the red joker wild (black is dead): As Ks Qd naturals, 1 wild.
+        let mut red = CardSet::EMPTY;
+        red.insert(Card::RED_JOKER);
+        let (nat, w) = hand.split_wild(red);
+        assert_eq!((nat.len(), w), (3, 1));
+        // A wild joker is any wild: As Ks + 3 wilds = the same as As Ks + Qs Qh Qc wild.
+        let (nat, w) = hand.split_wild(CardSet::JOKERS.union(queens));
+        assert_eq!(
+            crate::eval::eval_high_wild(nat, w).category(),
+            crate::eval::Category::RoyalFlush
+        );
+    }
+
+    #[test]
+    fn deck_with_jokers_has_54_distinct_cards() {
+        let mut rng = rng_from_seed(5);
+        let mut deck = Deck::with_jokers(&mut rng);
+        let mut seen = CardSet::EMPTY;
+        while let Some(c) = deck.deal() {
+            assert!(seen.insert(c), "{c} dealt twice");
+        }
+        assert_eq!(seen, CardSet::FULL_DECK_WITH_JOKERS);
     }
 }

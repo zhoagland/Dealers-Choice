@@ -20,7 +20,7 @@ in a foundation PR or the family that first needs it, and then implements every 
 |---|---|---|---|---|
 | K1 | Multi-hand games with state carried between hands (`UntilDone`, `Carry`) | Guts Leg, 3-2-1 Drop, 3-5-7, Scare-a-moosh, Tempest, Booray | missing (API doc §9) | **G0** (API v2) |
 | K2 | **Stuns**: a penalty paid into the pot, sized "matches the pot up to $10" (Bible §Definitions) | 3-2-1 Drop, 3-5-7, Scare-a-moosh, Booray, Iron Cross / 3-2-1 variants | missing | **G0** (`engine::pot::Penalty`) |
-| K3 | Jokers (54-card deck) | Bullet | `Card(u8)` 0..52, `CardSet(u64)` | **G0** (indices 52, 53; still fit in u64) |
+| K3 | Jokers (54-card deck) | Bullet | `Card(u8)` 0..52, `CardSet(u64)` | **G0, done** (red = 13, black = 29: unused rank slots, invisible to rank masks) |
 | K4 | Pluggable evaluators: Omaha 2o2, 2-7 low, Badugi, short-deck high, 3-card (no straights/flushes), board geometry (lines/wheel/cross), numbers (blackjack values), high/low spade, single high card | most families | high, wild-high, A-6 low | **G0** adds the `Evaluator` framework; each family adds its evaluators, oracle-tested like v1 |
 | K5 | Per-seat wild sets | Low in the Hole, 3-5-7 (table-wide but changing) | table-wide wild rank (FTQ) | G6 (stud) |
 | K6 | N-way pot division with declarations (Top/Bottom board, 7/27, hi/lo numbers, Chicago spade half) | Double Board, Split Hold'em, numbers, Chicago | 2-way hi/lo `award_declared` | **G0** generalizes to `award_shares(shares: &[Share])` |
@@ -72,8 +72,12 @@ Decisions:
 | Hand record v2 = v1 + `carry_in` bytes | recompute carry from previous hands | Each hand stays independently replayable |
 
 Engine work in G0, besides the trait:
-- `Card`: indices 52 = red joker, 53 = black joker; `Deck::with_jokers()`. Evaluators treat a joker as
-  "wild" only when the game passes it in the wild set. Golden RNG test unchanged for 52-card decks.
+- `Card`: red joker = index 13, black joker = index 29 (unused rank slots of the `suit*16+rank` packing, so
+  `rank_mask` never sees them and the evaluators' hot paths are unchanged); `Deck::with_jokers()`,
+  `CardSet::FULL_DECK_WITH_JOKERS`. `CardSet::split_wild(wild)` → (naturals, wild count): a joker in the game's
+  wild set is wild, one outside it is dead (Bullet's face-up joker). Golden RNG test unchanged for 52-card
+  decks. **Done 2026-11-11.** Note for Bullet (G6): a dead joker leaves a 4-card hand, which the evaluators
+  (5–7 cards) don't take yet.
 - `pot::Penalty { seat, amount }` and `stun_amounts(pot_before, stunned_in_order, base_cap, step)` per the
   stun rule in §3 (cap $10, +$N per additional stunner in the same hand).
 - Both-declaration fallback (OQ-3, owner decision): if every remaining contestant failed a Both declaration,
