@@ -637,6 +637,21 @@ impl Game for Blackjack {
         }
     }
 
+    fn describe_action(&self, a: Action) -> String {
+        match a {
+            Action::Deal(c) => format!("deal {c}"),
+            Action::SetMax(i) => format!(
+                "set the max bet to {}",
+                Chips(50 * MAX_CHOICES[i as usize] as i64)
+            ),
+            Action::Wager(u) => format!("bet {}", Chips(50 * u as i64)),
+            Action::Hit => "hit".into(),
+            Action::Stand => "stand".into(),
+            Action::Double => "double down".into(),
+            Action::Split => "split".into(),
+        }
+    }
+
     fn describe_observation(&self, obs: &Observation) -> String {
         let v = self.view(obs);
         let mut out = format!("{} | {}", v.game, v.phase);

@@ -271,6 +271,7 @@ fn base(id: &'static str, name: &'static str, rules_ref: &'static str) -> Script
         resolution: Resolution::Normal,
         ante_first_hand_only: false,
         out_is_out: false,
+        orbit_stun: false,
     }
 }
 
@@ -1167,8 +1168,10 @@ const IC_SPLITS: &[(u8, u8)] = &[(4, 1), (3, 2), (2, 3)];
 /// and a column of 3 sharing the centre: row 0-2, column top 3 and bottom 4) is turned and hands
 /// are shown. High only.
 /// - **D-IC-1** best 5 from the 4 hole cards + the row *or* the column.
-/// - **D-IC-2** a single betting round (as written). The Bible's stun variation plays an orbit
-///   with stuns; it needs the multi-hand driver (G8).
+/// - **D-IC-2** a single betting round (as written).
+/// - **D-IC-3** variation `stun_orbit` (the Bible's): one orbit of hands; each hand's winner takes
+///   the pot and the losers at showdown are stunned into the next hand's pot; on the orbit's last
+///   hand the losers pay half a stun to the winner instead.
 fn iron_cross() -> Script {
     Script {
         steps: vec![
@@ -1187,6 +1190,14 @@ fn iron_cross() -> Script {
         layout: BoardLayout::Cross,
         positions: 5,
         lines: vec![vec![0, 1, 2], vec![3, 1, 4]],
+        variants: vec![Variant {
+            name: "stun_orbit",
+            apply: |s| {
+                s.length = GameLength::UntilDone { max_hands: 9 };
+                s.resolution = Resolution::StunOrbit;
+                s.orbit_stun = true;
+            },
+        }],
         ..base("iron_cross", "Iron Cross", "Poker Bible §Iron Cross")
     }
 }
@@ -1422,6 +1433,8 @@ fn guts_leg() -> Script {
 /// - **D-DROP-3** the game ends when a hand leaves the pot empty.
 /// - **D-DROP-4** $1 ante from everyone on the first hand only; the dummy hand is dealt only when
 ///   it's needed (nobody sees it otherwise, so this changes nothing).
+/// - **D-DROP-5** variation `stun_orbit` (the Bible's): the game lasts one orbit; on its last hand
+///   losers pay half a stun to the winner; a pot nobody wins on that hand is split evenly.
 fn drop_321() -> Script {
     let mut red_kings = CardSet::EMPTY;
     red_kings.insert("Kd".parse().unwrap());
@@ -1440,6 +1453,10 @@ fn drop_321() -> Script {
         wild: red_kings,
         length: GameLength::UntilDone { max_hands: 30 },
         resolution: Resolution::Drop,
+        variants: vec![Variant {
+            name: "stun_orbit",
+            apply: |s| s.orbit_stun = true,
+        }],
         ..base("drop_321", "3-2-1 Drop", "Poker Bible §3-2-1 Drop")
     }
 }

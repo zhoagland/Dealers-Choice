@@ -34,6 +34,16 @@ pub fn may_show<G: Game>(game: &G, end: &G::State) -> Vec<Seat> {
         .collect()
 }
 
+/// Seats that folded during the hand `end` (from the public view), as a bitmask. Used by the
+/// session's "if you're out you're out" flag (FR-GC-8).
+pub fn folded_seats<G: Game>(game: &G, end: &G::State) -> u16 {
+    let view = game.view(&game.observe(end, Seat(0)));
+    view.seats
+        .iter()
+        .filter(|s| s.status == SeatStatus::Folded)
+        .fold(0u16, |m, s| m | 1 << s.seat.0)
+}
+
 /// The cards `seat` would show: its face-down cards as it sees them.
 pub fn own_hidden_cards<G: Game>(game: &G, end: &G::State, seat: Seat) -> Vec<Card> {
     let view = game.view(&game.observe(end, seat));

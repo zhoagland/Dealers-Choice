@@ -31,6 +31,8 @@ pub struct PlayProfile {
     pub think_ms: u64,
     /// Stop after this many games.
     pub max_games: u32,
+    /// "If you're out you're out" in multi-hand games (FR-GC-8).
+    pub out_is_out: bool,
 }
 
 impl Default for PlayProfile {
@@ -40,12 +42,18 @@ impl Default for PlayProfile {
             bankroll: 100.0,
             bots: vec![7, 5, 3],
             game: String::new(),
-            pool: vec!["holdem_nl".into(), "ftq".into()],
+            // Bots choose from every Bible game (the solver test games excluded).
+            pool: games::registry::GAME_IDS
+                .iter()
+                .filter(|id| !matches!(**id, "kuhn" | "leduc"))
+                .map(|id| id.to_string())
+                .collect(),
             hints: false,
             review: true,
             review_playouts: 15_000,
             think_ms: 500,
             max_games: 1_000,
+            out_is_out: false,
         }
     }
 }
@@ -87,6 +95,10 @@ pub struct PlayArgs {
     /// Don't read or write the database. Not saved in profiles.
     #[arg(long)]
     pub no_save: bool,
+    /// "If you're out you're out": in multi-hand games, a seat that folds sits out the rest of
+    /// the game.
+    #[arg(long)]
+    pub out_is_out: bool,
 }
 
 impl PlayArgs {
@@ -121,6 +133,9 @@ impl PlayArgs {
         }
         if self.no_review {
             base.review = false;
+        }
+        if self.out_is_out {
+            base.out_is_out = true;
         }
         base
     }

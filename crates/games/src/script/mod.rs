@@ -231,6 +231,9 @@ pub struct Script {
     pub ante_first_hand_only: bool,
     /// "If you're out you're out": seats that fold (or go Out) sit out the rest of the game.
     pub out_is_out: bool,
+    /// The game lasts one orbit; on its last hand losers pay half a stun to the winner instead
+    /// of into the pot (the Bible's stun variations; D-IC-3, D-DROP-5).
+    pub orbit_stun: bool,
 }
 
 /// How a hand ends and what carries over (catalog G8).
@@ -251,6 +254,9 @@ pub enum Resolution {
     Tempest,
     /// Booray: 3 tricks scoop the pot; no trick "fries" (a stun); the others who played pay $1.
     Booray,
+    /// The stun variations (Iron Cross, 3-2-1 Drop): the hand's winner takes the pot, losers at
+    /// showdown are stunned into the next hand's pot; see `Script::orbit_stun`.
+    StunOrbit,
 }
 
 /// What a multi-hand game carries from hand to hand. Public; `Default` = first hand.
@@ -1538,6 +1544,11 @@ impl Scripted {
     }
 
     fn winnings(&self, s: &State) -> Vec<Chips> {
+        self.winnings_plus(s, Chips::ZERO)
+    }
+
+    /// Pot winnings with `carried` chips added to the pot.
+    fn winnings_plus(&self, s: &State, carried: Chips) -> Vec<Chips> {
         if s.gin != 0 {
             // Numbers: an empty hand scoops (several split it).
             let n = s.n() as usize;
@@ -1561,7 +1572,7 @@ impl Scripted {
             .fold(0u16, |m, i| m | 1 << i);
         let pots = build_pots(
             &s.betting.live_contributed(),
-            s.betting.dead_total(),
+            s.betting.dead_total() + carried,
             folded,
         );
         let values = self.values(s);
@@ -1603,6 +1614,28 @@ impl Scripted {
         };
         let zeros = vec![Chips::ZERO; n];
         let live = s.betting.live_mask();
+        // Orbit stun variations: is this the orbit's last hand?
+        let in_game = (all & !carry.out).count_ones();
+        let last_of_orbit = self.script.orbit_stun && carry.hands >= in_game;
+        // Half a stun from each loser to the winners (orbit's last hand).
+        let half_stuns = |losers: u16, winners: u16, total: Chips| -> (Vec<Chips>, Vec<Chips>) {
+            let mut pay = vec![Chips::ZERO; n];
+            let mut win = vec![Chips::ZERO; n];
+            let mut collected = Chips::ZERO;
+            for pen in stun_amounts(
+                total,
+                losers,
+                s.setup.button,
+                s.betting.stacks(),
+                self.stun_rule(),
+            ) {
+                let h = Chips(pen.amount.0 / 2);
+                pay[pen.seat.index()] = h;
+                collected += h;
+            }
+            split(total + collected, winners, &order, &mut win);
+            (win, pay)
+        };
         if self.out_is_out() {
             carry.out |= (all & !live & !s.setup.dealt_out) | s.outs;
         }
@@ -1668,6 +1701,71 @@ impl Scripted {
                     carry.legs = vec![0; n];
                 }
                 carry_all(carry)
+            }
+            Resolution::StunOrbit => {
+                let winners = if live.count_ones() <= 1 {
+                    live
+                } else {
+                    let win = self.winnings_plus(s, Chips(s.carry.pot));
+                    (0..n)
+                        .filter(|&i| win[i] > Chips::ZERO)
+                        .fold(0u16, |m, i| m | 1 << i)
+                };
+                let losers = live & !winners;
+                if winners == 0 {
+                    return carry_all(carry);
+                }
+                if last_of_orbit {
+                    let (win, pay) = half_stuns(losers, winners, total);
+                    carry.pot = 0;
+                    carry.over = true;
+                    return (net(&win, &pay), carry);
+                }
+                let mut win = vec![Chips::ZERO; n];
+                split(total, winners, &order, &mut win);
+                let mut stun = vec![Chips::ZERO; n];
+                for pen in stun_amounts(
+                    total,
+                    losers,
+                    s.setup.button,
+                    s.betting.stacks(),
+                    self.stun_rule(),
+                ) {
+                    stun[pen.seat.index()] = pen.amount;
+                }
+                carry.pot = stun.iter().map(|x| x.0).sum();
+                (net(&win, &stun), carry)
+            }
+            Resolution::Drop if last_of_orbit => {
+                // The orbit's last hand: the best hand takes the pot and half stuns; if nobody
+                // wins it, the pot is split evenly (D-DROP-5).
+                let ins = live.count_ones();
+                let lone_wins = ins == 1 && {
+                    let p = Seat(live.trailing_zeros() as u8);
+                    let rule = self.script.shares[0];
+                    hand::share_value(&rule, &s.own(p), &[], self.script.wild)
+                        > hand::share_value(&rule, &s.boards[0], &[], self.script.wild)
+                };
+                carry.over = true;
+                carry.pot = 0;
+                if ins >= 2 {
+                    let (winners, _) = best(&self.script.shares[0], live);
+                    let (win, pay) = half_stuns(live & !winners, winners, total);
+                    (net(&win, &pay), carry)
+                } else if lone_wins {
+                    let mut win = vec![Chips::ZERO; n];
+                    split(total, live, &order, &mut win);
+                    (net(&win, &zeros), carry)
+                } else {
+                    let mut win = vec![Chips::ZERO; n];
+                    split(
+                        total,
+                        all & !carry.out & !s.setup.dealt_out,
+                        &order,
+                        &mut win,
+                    );
+                    (net(&win, &zeros), carry)
+                }
             }
             Resolution::Drop => {
                 let ins: Vec<Seat> = (0..n as u8)
@@ -3652,6 +3750,10 @@ impl Game for Scripted {
             Action::Order(i) => format!("reveal order #{i}"),
             Action::Bid(b) => format!("bid {}", Chips(50 * b as i64)),
             Action::PlayCard(c) => format!("play {c}"),
+            Action::Fold => "fold".into(),
+            Action::CheckCall => "check / call".into(),
+            Action::RaiseTo(x) => format!("bet / raise to {x}"),
+            Action::Deal(c) => format!("deal {c}"),
             Action::Play(1) => "play".into(),
             Action::Play(_) => "drop".into(),
             Action::Name(0) => "pass".into(),
@@ -3668,7 +3770,6 @@ impl Game for Scripted {
                     p[0], p[1], p[2], p[3], p[4], p[5]
                 )
             }
-            a => format!("{a:?}"),
         }
     }
 }

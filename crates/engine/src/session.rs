@@ -82,6 +82,9 @@ pub struct Table {
     pub chooser: usize,
     /// Stack bots get in `Bankroll`-model games (they have no real bankroll).
     pub bot_stack: Chips,
+    /// "If you're out you're out" (FR-GC-8): in `Orbit` and `UntilDone` games, a seat that
+    /// folds sits out the rest of that game. Set by the session's host.
+    pub out_is_out: bool,
     /// The game in progress.
     current: Option<GameInProgress>,
     events: Vec<SessionEvent>,
@@ -103,6 +106,7 @@ impl Table {
             seats,
             chooser: 0,
             bot_stack,
+            out_is_out: false,
             current: None,
             events: Vec::new(),
         }
@@ -280,6 +284,21 @@ impl Table {
         );
         self.settle_hand(map, payoffs);
         self.current.as_mut().unwrap().hands_played -= 1;
+    }
+
+    /// FR-GC-8: with `out_is_out`, the seats that folded this hand (`folded` over hand seats,
+    /// mapped through `map`) sit out the rest of a multi-hand game. Single-hand games ignore it.
+    pub fn mark_folded(&mut self, map: &[usize], folded: u16) {
+        let multi = self.current.as_ref().is_some_and(|g| g.hands_total > 1);
+        if !self.out_is_out || !multi {
+            return;
+        }
+        for (k, &t) in map.iter().enumerate() {
+            if folded & (1 << k) != 0 && !self.seats[t].sitting_out {
+                self.seats[t].sitting_out = true;
+                self.events.push(SessionEvent::SitOut { seat: t });
+            }
+        }
     }
 
     /// End an `UntilDone` game after the current hand (its `Game::game_over` returned true).
@@ -515,6 +534,21 @@ mod tests {
         let (setup, map) = t.next_hand().unwrap();
         assert_eq!(setup.num_seats, 2, "sitting-out seat not dealt");
         assert_eq!(map, vec![1, 2]);
+    }
+
+    #[test]
+    fn out_is_out_sits_folded_seats_out_for_the_rest_of_an_orbit() {
+        let mut t = Table::new(vec![human(10_000), bot("a"), bot("b")], Chips(5_000));
+        t.out_is_out = true;
+        t.begin_game(&meta(StakeModel::Bankroll, GameLength::Orbit));
+        let (_, map) = t.next_hand().unwrap();
+        t.settle_hand(&map, &[Chips(100), Chips(-100), Chips(0)]);
+        t.mark_folded(&map, 0b010); // table seat 1 folded
+        let (setup, map) = t.next_hand().unwrap();
+        assert_eq!(setup.num_seats, 2);
+        assert_eq!(map, vec![0, 2]);
+        t.end_game();
+        assert!(!t.seats[1].sitting_out, "back in for the next game");
     }
 
     #[test]

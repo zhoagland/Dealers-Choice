@@ -21,7 +21,7 @@ use bots::ismcts::{Ismcts, IsmctsConfig};
 use bots::{Budget, IsmctsBot, Policy, play_hand_with};
 use engine::rng::{Stream, derive_rng, rng_from_seed};
 use engine::session::{SeatInfo, SeatKind, SessionEvent, Table};
-use engine::showdown::{may_show, own_hidden_cards};
+use engine::showdown::{folded_seats, may_show, own_hidden_cards};
 use engine::{Chips, Game, GameCarry, Seat, StakeModel};
 use games::registry::{GAME_IDS, GameVisitor, with_game};
 use sim::encoding::{HandRecord, encode, encode_carry};
@@ -130,6 +130,7 @@ pub fn run(args: PlayArgs, root: &DataRoot, profiles: &ProfileStore) -> CliResul
         });
     }
     let mut table = Table::new(seats, Chips::dollars(100.0));
+    table.out_is_out = s.out_is_out;
     let mut chooser_rng = derive_rng(seed, 0, Stream::Custom(1));
     let mut hand_counter = 0u64;
 
@@ -370,6 +371,7 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
                 p.db.store_hand(&stored).map_err(|e| e.to_string())?;
             }
             table.settle_hand(&map, &result.payoffs);
+            table.mark_folded(&map, folded_seats(&game, &end));
             if carry.finish_hand(&game, &end, &result.payoffs).game_over {
                 table.finish_game_early();
             }
