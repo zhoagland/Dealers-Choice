@@ -1,11 +1,13 @@
 //! Core of the Dealers Choice engine: cards, randomness, hand evaluation, the `Game` trait,
-//! replay, and the conformance harness. Betting, pots, and sessions arrive in later PRs.
+//! replay, the conformance harness, betting rules, and pot splitting. Sessions arrive later.
 //!
 //! Design docs: `docs/tech/engine.md`, `docs/api/game-driver.md`.
 
+pub mod betting;
 pub mod card;
 pub mod eval;
 pub mod game;
+pub mod pot;
 pub mod replay;
 pub mod rng;
 pub mod testing;
