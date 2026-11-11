@@ -925,6 +925,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "toml",
 ]
 
 [[package]]

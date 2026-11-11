@@ -29,6 +29,9 @@ pub use blueprint::{Blueprint, BlueprintPolicy};
 
 const CHECKPOINT_TAG: u32 = 0x4D43_4346; // "MCCF"
 
+/// A checkpoint's contents: tag, iterations, and every information set's tables.
+type CheckpointRows<O, A> = (u32, u64, Vec<(O, InfoSet<A>)>);
+
 /// Training options.
 #[derive(Clone, Debug)]
 pub struct MccfrConfig {
@@ -200,7 +203,7 @@ impl<G: Game> Mccfr<G> {
     where
         G::Observation: DeserializeOwned,
     {
-        let (tag, iterations, rows): (u32, u64, Vec<(G::Observation, InfoSet<G::Action>)>) =
+        let (tag, iterations, rows): CheckpointRows<G::Observation, G::Action> =
             postcard::from_bytes(bytes).map_err(|e| format!("bad checkpoint: {e}"))?;
         if tag != CHECKPOINT_TAG {
             return Err("not an MCCFR checkpoint".into());
