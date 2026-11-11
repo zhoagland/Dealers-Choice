@@ -1,0 +1,16 @@
+# An external bot (FR-BT-8): use it as `ext:config/external/example.toml` anywhere a bot is
+# named (dc sim --bots, campaign populations, dc play --bots). See sim/src/external.rs.
+
+model = "example-py-v1"          # label in reports and the cache key
+transport = "stdio"              # "stdio" (a local program) or "http" (POST JSON to `url`)
+command = ["python", "tools/external_bot_example.py"]
+
+# For an HTTP model such as Jev (fill in from the vendor's docs):
+# transport = "http"
+# url = "https://<endpoint>/decide"
+# api_key_env = "JEV_API_KEY"    # read from the environment, sent as a bearer token
+
+timeout_ms = 5000                # per decision; on timeout the fallback bot decides
+concurrency = 4                  # parallel programs / requests in flight
+fallback = "ismcts:3"
+cache = "data/external/example-py-v1.jsonl"   # saved answers: re-runs are free and identical

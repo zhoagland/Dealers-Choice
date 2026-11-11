@@ -137,26 +137,58 @@ pub fn award_high<V: Ord + Copy>(pots: &[Pot], values: &[Option<V>], order: &[Se
     out
 }
 
-/// Award pots in a declare game (PRD §4, FTQ house rules):
-/// - High contestants declared High or Both; low contestants declared Low or Both.
-/// - A Both declarer must win **both** sides outright (no ties). One who doesn't is out of the
-///   pot entirely, and the pot is decided among the others.
-/// - If both sides have contestants: high half (odd chip → high) to the best high, low half to
-///   the best low. If only one side has contestants, that side takes the whole pot.
-/// - Fallback (OQ-3): if every eligible seat was a failed Both declarer, the pot is split as
-///   an ordinary hi/lo pot among them, ignoring declarations.
-pub fn award_declared<V: Ord + Copy>(
+/// One share of a pot (High, Low, Top board, Spade, …) and how seats rank for it.
+#[derive(Clone, Copy, Debug)]
+pub struct Share<'a, V> {
+    pub name: &'static str,
+    /// Per seat; bigger is better. `None` = can't win this share (no low, no spade…).
+    pub values: &'a [Option<V>],
+}
+
+/// What a seat declared it is playing for in [`award_shares`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Claim {
+    /// Contests only share `k`.
+    One(u8),
+    /// Contests every share and must win **each one outright** (the "Both" rule): tying or
+    /// losing any share knocks the seat out of the pot entirely.
+    All,
+}
+
+/// Award pots that split into named shares (PRD §4; catalog §2 `award_shares`).
+///
+/// - `claims = None`: no declarations; every eligible seat contests every share (Chicago:
+///   high hand + high spade).
+/// - `claims = Some(c)`: seat `i` contests what `c[i]` says; `None` contests nothing.
+///   [`Claim::All`] seats must be the sole best in every share; failed ones are removed
+///   and the pot is decided among the rest.
+/// - The pot is divided evenly among the shares that still have a contestant holding a value;
+///   odd chips go to the earliest shares (so High before Low). A share nobody can win rolls
+///   into the others.
+/// - **OQ-3 (owner decision):** if every contestant left failed a `Claim::All`, the pot is
+///   split **evenly** among them.
+/// - A pot with one eligible seat goes to that seat.
+pub fn award_shares<V: Ord + Copy>(
     pots: &[Pot],
-    declarations: &[Option<Declare>],
-    high: &[Option<V>],
-    low: &[Option<V>],
+    shares: &[Share<'_, V>],
+    claims: Option<&[Option<Claim>]>,
     order: &[Seat],
 ) -> Vec<Chips> {
-    let n = declarations.len();
-    let mask_of = |pred: &dyn Fn(Declare) -> bool, within: u16| -> u16 {
-        (0..n)
-            .filter(|&i| within & (1 << i) != 0 && declarations[i].is_some_and(pred))
-            .fold(0, |m, i| m | 1 << i)
+    assert!(!shares.is_empty(), "award_shares needs at least one share");
+    let n = shares[0].values.len();
+    assert!(
+        shares.iter().all(|sh| sh.values.len() == n),
+        "share values length"
+    );
+    let contests = |i: usize, k: usize| -> bool {
+        match claims {
+            None => true,
+            Some(c) => match c[i] {
+                Some(Claim::All) => true,
+                Some(Claim::One(j)) => j as usize == k,
+                None => false,
+            },
+        }
     };
     let mut out = vec![Chips::ZERO; n];
     for pot in pots {
@@ -164,51 +196,148 @@ pub fn award_declared<V: Ord + Copy>(
             split(pot.amount, pot.eligible, order, &mut out);
             continue;
         }
-        let hi_side = mask_of(&|d| d != Declare::Low, pot.eligible);
-        let lo_side = mask_of(&|d| d != Declare::High, pot.eligible);
-        let both = mask_of(&|d| d == Declare::Both, pot.eligible);
-
-        // A Both declarer survives only as the *sole* best on each side.
-        let (best_hi, best_lo) = (best(hi_side, high), best(lo_side, low));
+        let side = |k: usize, exclude: u16| -> u16 {
+            (0..n)
+                .filter(|&i| pot.eligible & !exclude & (1 << i) != 0 && contests(i, k))
+                .fold(0, |m, i| m | 1 << i)
+        };
+        // Scoopers survive only as the sole best of every share.
+        let all_claim: u16 = match claims {
+            None => 0,
+            Some(c) => (0..n)
+                .filter(|&i| pot.eligible & (1 << i) != 0 && c[i] == Some(Claim::All))
+                .fold(0, |m, i| m | 1 << i),
+        };
         let mut failed = 0u16;
-        for i in (0..n).filter(|&i| both & (1 << i) != 0) {
-            let sole_hi = best_hi == 1 << i;
-            let sole_lo = best_lo == 1 << i;
-            if !(sole_hi && sole_lo) {
+        for i in (0..n).filter(|&i| all_claim & (1 << i) != 0) {
+            let sole_everywhere = shares
+                .iter()
+                .enumerate()
+                .all(|(k, sh)| best(side(k, 0), sh.values) == 1 << i);
+            if !sole_everywhere {
                 failed |= 1 << i;
             }
         }
-        let (hi_side, lo_side) = (hi_side & !failed, lo_side & !failed);
-
-        match (hi_side != 0, lo_side != 0) {
-            (true, true) => {
-                let lo_half = Chips(pot.amount.0 / 2);
-                let hi_half = pot.amount - lo_half; // odd chip to high
-                split(hi_half, best(hi_side, high), order, &mut out);
-                split(lo_half, best(lo_side, low), order, &mut out);
-            }
-            (true, false) => split(pot.amount, best(hi_side, high), order, &mut out),
-            (false, true) => split(pot.amount, best(lo_side, low), order, &mut out),
-            (false, false) => {
-                // Everyone left failed a Both declaration: plain hi/lo among them.
-                let lo_half = Chips(pot.amount.0 / 2);
-                split(
-                    pot.amount - lo_half,
-                    best(pot.eligible, high),
-                    order,
-                    &mut out,
-                );
-                split(lo_half, best(pot.eligible, low), order, &mut out);
-            }
+        let winners: Vec<u16> = shares
+            .iter()
+            .enumerate()
+            .map(|(k, sh)| best(side(k, failed), sh.values))
+            .collect();
+        let live = winners.iter().filter(|&&w| w != 0).count() as i64;
+        if live == 0 {
+            // OQ-3: nobody left but failed scoopers (or nobody can win any share).
+            let pool = if failed != 0 { failed } else { pot.eligible };
+            split(pot.amount, pool, order, &mut out);
+            continue;
+        }
+        let portion = pot.amount.0 / live;
+        let mut odd = pot.amount.0 % live;
+        for &w in winners.iter().filter(|&&w| w != 0) {
+            let extra = if odd > 0 { 1 } else { 0 };
+            odd -= extra;
+            split(Chips(portion + extra), w, order, &mut out);
         }
     }
     out
+}
+
+/// Award pots in a hi/lo declare game (PRD §4, FTQ house rules): a thin wrapper over
+/// [`award_shares`] with shares High and Low, where High → `Claim::One(0)`, Low →
+/// `Claim::One(1)`, Both → `Claim::All`. The high half takes the odd chip. If every remaining
+/// contestant failed a Both declaration, the pot is split evenly among them (OQ-3).
+pub fn award_declared<V: Ord + Copy>(
+    pots: &[Pot],
+    declarations: &[Option<Declare>],
+    high: &[Option<V>],
+    low: &[Option<V>],
+    order: &[Seat],
+) -> Vec<Chips> {
+    let claims: Vec<Option<Claim>> = declarations
+        .iter()
+        .map(|d| {
+            d.map(|d| match d {
+                Declare::High => Claim::One(0),
+                Declare::Low => Claim::One(1),
+                Declare::Both => Claim::All,
+            })
+        })
+        .collect();
+    let shares = [
+        Share {
+            name: "High",
+            values: high,
+        },
+        Share {
+            name: "Low",
+            values: low,
+        },
+    ];
+    award_shares(pots, &shares, Some(&claims), order)
 }
 
 /// Seats in odd-chip priority order: first seat left of the button, clockwise.
 pub fn order_from_button(button: Seat, num_seats: u8) -> Vec<Seat> {
     (1..=num_seats)
         .map(|k| Seat((button.0 + k) % num_seats))
+        .collect()
+}
+
+/// A payment a seat owes outside the betting, e.g. a stun. The game decides where it goes
+/// (usually into the next pot).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Penalty {
+    pub seat: Seat,
+    pub amount: Chips,
+}
+
+/// How stuns are sized (owner decision OQ-9, `docs/tech/game-catalog.md` §3).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StunRule {
+    /// Cap for the first stunned player in a hand. House default $10.
+    pub base_cap: Chips,
+    /// How much higher each further stunned player's cap is, in the same hand. Picked by the
+    /// chooser (`Config::stun_step`); default $0.
+    pub step: Chips,
+}
+
+impl Default for StunRule {
+    fn default() -> StunRule {
+        StunRule {
+            base_cap: Chips(1_000),
+            step: Chips::ZERO,
+        }
+    }
+}
+
+/// What each stunned seat pays this hand: the pot, capped.
+///
+/// - The `k`-th stunned seat (k = 0, 1, …) is capped at `base_cap + k·step`.
+/// - **D-STUN-1:** every stun is measured against `pot_before` (the pot before this hand's
+///   stuns), not the pot growing as stuns are paid.
+/// - **D-STUN-2:** stunned seats are taken in order starting left of the dealer (`button`).
+/// - **D-G0-2:** a stun larger than the seat's stack takes the whole stack.
+///
+/// `stunned` is a bitmask over seats; `stacks[i]` is what seat `i` can pay.
+pub fn stun_amounts(
+    pot_before: Chips,
+    stunned: u16,
+    button: Seat,
+    stacks: &[Chips],
+    rule: StunRule,
+) -> Vec<Penalty> {
+    let n = stacks.len() as u8;
+    order_from_button(button, n)
+        .into_iter()
+        .filter(|s| stunned & (1 << s.0) != 0)
+        .enumerate()
+        .map(|(k, seat)| {
+            let cap = rule.base_cap + Chips(rule.step.0 * k as i64);
+            let amount = pot_before
+                .min(cap)
+                .min(stacks[seat.index()])
+                .max(Chips::ZERO);
+            Penalty { seat, amount }
+        })
         .collect()
 }
 
@@ -394,6 +523,100 @@ mod tests {
     }
 
     #[test]
+    fn everyone_failing_both_splits_the_pot_evenly_oq3() {
+        // Two Both declarers each win one side: both fail, nobody else is left.
+        let pots = vec![Pot {
+            amount: Chips(301),
+            eligible: 0b11,
+        }];
+        let decl = [Some(Declare::Both), Some(Declare::Both)];
+        let won = award_declared(
+            &pots,
+            &decl,
+            &[Some(9), Some(1)],
+            &[Some(1), Some(9)],
+            &order(2),
+        );
+        assert_eq!(won, c(&[151, 150]), "even split, odd chip left of button");
+    }
+
+    #[test]
+    fn shares_without_declarations_chicago_style() {
+        // High hand and high spade, half each; nobody declares.
+        let pots = vec![Pot {
+            amount: Chips(400),
+            eligible: 0b111,
+        }];
+        let shares = [
+            Share {
+                name: "High",
+                values: &[Some(9), Some(5), Some(1)][..],
+            },
+            Share {
+                name: "Spade",
+                values: &[None, Some(3), Some(12)][..],
+            },
+        ];
+        let won = award_shares(&pots, &shares, None, &order(3));
+        assert_eq!(won, c(&[200, 0, 200]));
+        // Nobody holds a spade: that half rolls to the high hand.
+        let no_spade = [
+            shares[0],
+            Share {
+                name: "Spade",
+                values: &[None, None, None][..],
+            },
+        ];
+        assert_eq!(
+            award_shares(&pots, &no_spade, None, &order(3)),
+            c(&[400, 0, 0])
+        );
+    }
+
+    #[test]
+    fn three_shares_with_claims_and_a_scooper() {
+        let pots = vec![Pot {
+            amount: Chips(301),
+            eligible: 0b111,
+        }];
+        let a = [Some(5), Some(9), Some(1)];
+        let b = [Some(9), Some(1), Some(1)];
+        let d = [Some(9), Some(1), Some(5)];
+        let shares = [
+            Share {
+                name: "A",
+                values: &a[..],
+            },
+            Share {
+                name: "B",
+                values: &b[..],
+            },
+            Share {
+                name: "C",
+                values: &d[..],
+            },
+        ];
+        // s0 scoops but loses A to s1 -> out; s1 takes A, s2 alone contests C, B rolls over.
+        let claims = [Some(Claim::All), Some(Claim::One(0)), Some(Claim::One(2))];
+        let won = award_shares(&pots, &shares, Some(&claims), &order(3));
+        assert_eq!(won, c(&[0, 151, 150]));
+        // If s0 also had the best A, it scoops everything.
+        let a2 = [Some(10), Some(9), Some(1)];
+        let shares2 = [
+            Share {
+                name: "A",
+                values: &a2[..],
+            },
+            shares[1],
+            shares[2],
+        ];
+        assert_eq!(
+            award_shares(&pots, &shares2, Some(&claims), &order(3)),
+            c(&[301, 0, 0])
+        );
+    }
+
+    #[test]
     fn side_nobody_declared_rolls_to_the_other() {
         let pots = vec![Pot {
             amount: Chips(200),
@@ -436,5 +659,35 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn stuns_are_the_pot_capped_rising_per_stunner_from_left_of_dealer() {
+        let rule = StunRule {
+            base_cap: Chips(1_000),
+            step: Chips(200),
+        };
+        let stacks = c(&[5_000, 5_000, 5_000, 5_000]);
+        // Button s2: order is s3, s0, s1. Stunned: s0, s1, s3. Pot $25.
+        let p = stun_amounts(Chips(2_500), 0b1011, Seat(2), &stacks, rule);
+        let got: Vec<(u8, i64)> = p.iter().map(|x| (x.seat.0, x.amount.0)).collect();
+        assert_eq!(got, vec![(3, 1_000), (0, 1_200), (1, 1_400)]);
+        // Small pot: everyone pays the pot measured before stuns (D-STUN-1), not a growing pot.
+        let p = stun_amounts(Chips(300), 0b1011, Seat(2), &stacks, rule);
+        assert!(p.iter().all(|x| x.amount == Chips(300)));
+        // Short stack pays what it has (D-G0-2).
+        let short = c(&[5_000, 150, 5_000, 5_000]);
+        let p = stun_amounts(Chips(2_500), 0b0010, Seat(0), &short, rule);
+        assert_eq!(
+            p,
+            vec![Penalty {
+                seat: Seat(1),
+                amount: Chips(150)
+            }]
+        );
+        // Default rule: flat $10 cap.
+        let p = stun_amounts(Chips(9_999), 0b0011, Seat(3), &stacks, StunRule::default());
+        assert!(p.iter().all(|x| x.amount == Chips(1_000)));
+        assert!(stun_amounts(Chips(500), 0, Seat(0), &stacks, rule).is_empty());
     }
 }

@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hand Study</title>
+<style>
+:root {
+  color-scheme: light;
+  --surface-0: #f5f4f1;
+  --surface-1: #fcfcfb;
+  --surface-2: #f0efec;
+  --border: #dddcd7;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #7a7974;
+  --accent: #2a78d6;
+  --neutral: #e6e5e1;
+  --pos-1: #cde2fb; --pos-2: #9ec5f4; --pos-3: #6da7ec; --pos-4: #3987e5; --pos-5: #1c5cab;
+  --neg-1: #fbd6d5; --neg-2: #f4a9a8; --neg-3: #ec7b7a; --neg-4: #e34948; --neg-5: #b3302f;
+  --good: #0ca30c; --warning: #fab219; --critical: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #242422; --border: #383835;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+    --accent: #3987e5; --neutral: #383835;
+    --pos-1: #18324f; --pos-2: #184f95; --pos-3: #256abf; --pos-4: #3987e5; --pos-5: #86b6ef;
+    --neg-1: #4a2020; --neg-2: #7a2c2b; --neg-3: #b3302f; --neg-4: #e34948; --neg-5: #f4a9a8;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #242422; --border: #383835;
+  --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+  --accent: #3987e5; --neutral: #383835;
+  --pos-1: #18324f; --pos-2: #184f95; --pos-3: #256abf; --pos-4: #3987e5; --pos-5: #86b6ef;
+  --neg-1: #4a2020; --neg-2: #7a2c2b; --neg-3: #b3302f; --neg-4: #e34948; --neg-5: #f4a9a8;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--surface-0); color: var(--text-primary);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 1180px; margin: 0 auto; padding: 24px 16px 64px; }
+a { color: var(--accent); }
+h1 { font-size: 24px; margin: 0 0 4px; }
+h2 { font-size: 18px; margin: 0 0 4px; }
+.sub { color: var(--text-secondary); margin: 0 0 16px; }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin: 16px 0; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.kpi { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.kpi .label { color: var(--text-secondary); font-size: 12px; }
+.kpi .value { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.kpi .note { color: var(--text-muted); font-size: 12px; }
+.bar { height: 6px; border-radius: 3px; background: var(--surface-2); margin-top: 6px; overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.filters { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: end; margin: 8px 0 14px; }
+.filters label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); }
+select, button { font: inherit; color: var(--text-primary); background: var(--surface-1);
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+button { cursor: pointer; }
+button[aria-pressed="true"] { background: var(--surface-2); border-color: var(--text-muted); }
+.seg { display: inline-flex; gap: 0; }
+.seg button { border-radius: 0; }
+.seg button:first-child { border-radius: 6px 0 0 6px; }
+.seg button:last-child { border-radius: 0 6px 6px 0; }
+.grid { display: grid; grid-template-columns: repeat(13, minmax(0, 1fr)); gap: 2px; max-width: 720px; }
+.cell { aspect-ratio: 1; border-radius: 4px; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; font-size: 12px; font-weight: 600; cursor: default; line-height: 1.1;
+  color: var(--text-primary); }
+.cell small { font-weight: 400; font-size: 10px; color: inherit; opacity: .85; }
+.tx-4, .tx-5 { color: #fff !important; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .tx-5 { color: #0b0b0b !important; } }
+:root[data-theme="dark"] .tx-5 { color: #0b0b0b !important; }
+.legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; color: var(--text-secondary); font-size: 12px; margin: 10px 0 0; }
+.sw { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: -3px; margin-right: 4px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+th { color: var(--text-secondary); font-weight: 500; font-size: 12px; position: sticky; top: 0; background: var(--surface-1); }
+td:first-child, th:first-child { text-align: left; }
+.scroll { overflow: auto; max-height: 560px; }
+.verdict { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
+.edgebar { position: relative; width: 120px; height: 10px; display: inline-block; vertical-align: middle; }
+.edgebar::before { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--text-muted); }
+.edgebar > i { position: absolute; top: 0; height: 10px; border-radius: 3px; }
+.mx td { text-align: center; padding: 4px; }
+.mx td.c { min-width: 82px; border-radius: 4px; border-bottom: 2px solid var(--surface-1); }
+.mx td.best { outline: 2px solid var(--text-primary); outline-offset: -2px; }
+.mx td.thin { color: var(--text-muted); }
+.muted { color: var(--text-muted); }
+.note { color: var(--text-secondary); font-size: 13px; }
+#tip { position: fixed; pointer-events: none; z-index: 10; background: var(--surface-1); color: var(--text-primary);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.18);
+  display: none; max-width: 280px; }
+#tip b { font-size: 13px; }
+.toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+@media (max-width: 640px) { .cell { font-size: 9px; } .cell small { display: none; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="toolbar">
+    <div>
+      <h1 id="title">Hand study</h1>
+      <p class="sub" id="subtitle"></p>
+    </div>
+    <div>
+      <a href="../index.html">All games</a> ·
+      <label class="muted"><input type="checkbox" id="autorefresh"> refresh every minute</label>
+    </div>
+  </div>
+
+  <section class="kpis" id="kpis"></section>
+
+  <section class="card" id="start-card">
+    <h2>Starting hands</h2>
+    <p class="note">Edge = average result when the hand was played (call, raise or free check) minus the result of folding it in the same position, per hand.
+      <b>Play</b> and <b>Fold</b> are only shown when the 95% confidence interval excludes zero.</p>
+    <div class="filters">
+      <label>Position <select id="pos"></select></label>
+      <label>View <span class="seg" id="startview"></span></label>
+    </div>
+    <div id="start-body"></div>
+  </section>
+
+  <section class="card">
+    <h2>When to bet, and how much</h2>
+    <p class="note">Average final result of the hand after each action, for every situation the population faced.
+      Compare across a row: the outlined cell is the best-scoring action with enough samples. Bets are sized by what was added relative to the pot.</p>
+    <div class="filters">
+      <label>Street <select id="street"></select></label>
+      <label id="board-wrap">Board <select id="board"></select></label>
+      <label>Rows <span class="seg" id="rows"></span></label>
+      <label>Min. samples <select id="minn"><option>30</option><option selected>200</option><option>1000</option></select></label>
+    </div>
+    <div class="scroll" id="dec-body"></div>
+    <div class="legend" id="dec-legend"></div>
+  </section>
+
+  <section class="card">
+    <h2>Population results</h2>
+    <div id="bots"></div>
+    <p class="note">How to read this page: every number is the average outcome of hands played by the bots listed above, so it describes
+      what worked <i>for this population</i>, not a solved strategy. Stronger or different bots can change the answers. Results are in units of
+      <span id="unit"></span> per hand.</p>
+  </section>
+</main>
+<div id="tip" role="tooltip"></div>
+
+<script id="data" type="application/json">"__DC_DATA__"</script>
+<script>
+"use strict";
+const D = JSON.parse(document.getElementById("data").textContent);
+const L = D.labels;
+const $ = (id) => document.getElementById(id);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("dc:" + D.game_id + ":" + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem("dc:" + D.game_id + ":" + k, JSON.stringify(v)); } catch (e) {} },
+};
+
+// ---- statistics: Welford accumulators {n, mean, m2}, merged with Chan's formula ----
+const W = () => ({ n: 0, mean: 0, m2: 0 });
+function merge(a, b) {
+  if (!b.n) return a;
+  if (!a.n) return { n: b.n, mean: b.mean, m2: b.m2 };
+  const n = a.n + b.n, d = b.mean - a.mean;
+  return { n, mean: a.mean + d * b.n / n, m2: a.m2 + b.m2 + d * d * a.n * b.n / n };
+}
+const se = (w) => w.n < 2 ? Infinity : Math.sqrt(w.m2 / (w.n - 1) / w.n);
+const fmt = (x, d = 2) => (x >= 0 ? "+" : "−") + Math.abs(x).toFixed(d);
+const fmtN = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n);
+
+// ---- header ----
+$("title").textContent = D.game + " · hand study";
+document.title = D.game + " study";
+$("subtitle").textContent = `Campaign “${D.campaign}” · ${D.seats} seats · bots: ${D.bots.join(", ")} · updated ${new Date(D.updated_unix * 1000).toLocaleString()}`;
+$("unit").textContent = D.unit;
+const pct = Math.min(100, 100 * D.hands / Math.max(1, D.target_hands));
+const decisions = D.study.decisions.reduce((s, r) => s + r.stat.n, 0);
+$("kpis").innerHTML = `
+  <div class="kpi"><div class="label">Hands simulated</div><div class="value">${fmtN(D.hands)}</div>
+    <div class="note">of ${fmtN(D.target_hands)} target</div><div class="bar"><i style="width:${pct}%"></i></div></div>
+  <div class="kpi"><div class="label">Speed</div><div class="value">${Math.round(D.hands_per_sec).toLocaleString()}</div><div class="note">hands per second</div></div>
+  <div class="kpi"><div class="label">Decisions analysed</div><div class="value">${fmtN(decisions)}</div><div class="note">bets, calls, folds, choices</div></div>
+  <div class="kpi"><div class="label">Starting-hand classes</div><div class="value">${L.start_classes.length}</div><div class="note">${L.start_grid.length ? "13×13 grid" : "ranked list"}</div></div>`;
+
+// ---- positions ----
+function posName(p, n) {
+  if (D.game_id.startsWith("holdem")) {
+    if (n === 2) return p === 0 ? "BB" : "Button (SB)";
+    const fromEnd = n - 1 - p;
+    if (p === 0) return "Small blind"; if (p === 1) return "Big blind";
+    if (fromEnd === 0) return "Button"; if (fromEnd === 1) return "Cutoff"; if (fromEnd === 2 && n > 4) return "Hijack";
+    return p === 2 ? "Under the gun" : "UTG+" + (p - 2);
+  }
+  return p === n - 1 ? "Dealer" : `${p + 1} left of dealer`;
+}
+const positions = [...new Set(D.study.start.map((r) => r.pos))].sort((a, b) => a - b);
+$("pos").innerHTML = `<option value="all">All positions</option>` + positions.map((p) => `<option value="${p}">${posName(p, D.seats)}</option>`).join("");
+$("pos").value = store.get("pos", "all");
+
+// ---- starting-hand edges ----
+const PLAY = new Set(["call", "raise", "check"]);
+function startStats(posSel) {
+  // Fold result per position (constant per position: the forced bet lost).
+  const foldBy = {};
+  for (const r of D.study.start) if (r.first === "fold") foldBy[r.pos] = merge(foldBy[r.pos] || W(), r.stat);
+  const by = {};
+  for (const r of D.study.start) {
+    if (posSel !== "all" && r.pos !== +posSel) continue;
+    const c = by[r.class] || (by[r.class] = { cls: r.class, all: W(), play: W(), fold: W(), perPos: {} });
+    if (r.first === "walk") continue;
+    c.all = merge(c.all, r.stat);
+    if (r.first === "fold") c.fold = merge(c.fold, r.stat);
+    if (PLAY.has(r.first)) {
+      c.play = merge(c.play, r.stat);
+      c.perPos[r.pos] = merge(c.perPos[r.pos] || W(), r.stat);
+    }
+  }
+  return Object.values(by).map((c) => {
+    // Edge per position, weighted by how often the hand was played there.
+    let n = 0, edge = 0, var_ = 0, foldEv = 0;
+    for (const [p, w] of Object.entries(c.perPos)) {
+      const f = foldBy[p] ? foldBy[p].mean : 0;
+      n += w.n; edge += (w.mean - f) * w.n; foldEv += f * w.n;
+      const s = se(w); var_ += (isFinite(s) ? s * s : 1e6) * w.n * w.n;
+    }
+    const e = n ? edge / n : 0, s = n ? Math.sqrt(var_) / n : Infinity;
+    let verdict = "insufficient";
+    if (c.play.n >= 30) verdict = e - 1.96 * s > 0 ? "play" : e + 1.96 * s < 0 ? "fold" : "marginal";
+    return { ...c, name: L.start_classes[c.cls] ?? String(c.cls), edge: e, edgeSe: s, foldEv: n ? foldEv / n : 0,
+      rate: c.all.n ? c.play.n / c.all.n : 0, verdict };
+  });
+}
+const VERDICT = {
+  play: { label: "Play", icon: "▲", color: "var(--good)" },
+  fold: { label: "Fold", icon: "▼", color: "var(--critical)" },
+  marginal: { label: "Marginal", icon: "●", color: "var(--text-muted)" },
+  insufficient: { label: "Too few hands", icon: "○", color: "var(--text-muted)" },
+};
+
+// Diverging step (1..5) for a value against a scale max; sign picks the arm.
+function step(v, max) { const t = Math.min(1, Math.abs(v) / (max || 1)); return Math.max(1, Math.ceil(t * 5)); }
+function divColor(v, max, significant) {
+  if (!significant) return { bg: "var(--neutral)", tx: "" };
+  const k = step(v, max);
+  return { bg: `var(--${v >= 0 ? "pos" : "neg"}-${k})`, tx: k >= 4 ? ` tx-${k}` : "" };
+}
+function scaleMax(values) {
+  const a = values.map(Math.abs).filter(isFinite).sort((x, y) => x - y);
+  return a.length ? a[Math.floor(0.95 * (a.length - 1))] || a[a.length - 1] : 1;
+}
+
+const startView = { v: store.get("startview", L.start_grid.length ? "grid" : "table") };
+function seg(el, options, state, key, onChange) {
+  el.innerHTML = options.map(([v, t]) => `<button type="button" data-v="${v}" aria-pressed="${state.v === v}">${t}</button>`).join("");
+  el.onclick = (e) => { const b = e.target.closest("button"); if (!b) return; state.v = b.dataset.v; store.set(key, state.v);
+    for (const x of el.children) x.setAttribute("aria-pressed", x.dataset.v === state.v); onChange(); };
+}
+seg($("startview"), L.start_grid.length ? [["grid", "Grid"], ["table", "Table"]] : [["table", "Ranked list"]], startView, "startview", renderStart);
+
+function renderStart() {
+  const rows = startStats($("pos").value);
+  if (!rows.length) { $("start-body").innerHTML = `<p class="muted">No starting-hand data yet.</p>`; return; }
+  const max = scaleMax(rows.filter((r) => r.verdict === "play" || r.verdict === "fold").map((r) => r.edge));
+  const legend = `<div class="legend">
+      <span><span class="sw" style="background:var(--pos-4)"></span>Play: playing beats folding</span>
+      <span><span class="sw" style="background:var(--neg-4)"></span>Fold: playing loses vs folding</span>
+      <span><span class="sw" style="background:var(--neutral)"></span>Not significant / too few hands</span>
+      <span>Stronger colour = bigger edge (full colour at ±${max.toFixed(1)} units; 1 unit = ${D.unit})</span></div>`;
+  if (startView.v === "grid" && L.start_grid.length) {
+    const cells = new Array(169).fill(null);
+    for (const r of rows) { const [y, x] = L.start_grid[r.cls]; cells[y * 13 + x] = r; }
+    let html = `<div class="grid" role="img" aria-label="Starting hand grid: suited hands above the diagonal, offsuit below">`;
+    cells.forEach((r, i) => {
+      if (!r) { html += `<div class="cell" style="background:var(--surface-2)"></div>`; return; }
+      const c = divColor(r.edge, max, r.verdict === "play" || r.verdict === "fold");
+      html += `<div class="cell${c.tx}" style="background:${c.bg}" data-cls="${r.cls}">${r.name}<small>${r.play.n >= 30 ? fmt(r.edge, 1) : ""}</small></div>`;
+    });
+    html += `</div>`;
+    $("start-body").innerHTML = html + legend + `<p class="note">Suited hands are above the diagonal, offsuit below, pairs on it. Hover a cell for details.</p>`;
+    const byCls = Object.fromEntries(rows.map((r) => [r.cls, r]));
+    $("start-body").querySelectorAll(".cell[data-cls]").forEach((el) => hover(el, () => startTip(byCls[el.dataset.cls])));
+  } else {
+    rows.sort((a, b) => b.edge - a.edge);
+    const best = rows.filter((r) => r.verdict === "play").length, worst = rows.filter((r) => r.verdict === "fold").length;
+    let html = `<p class="note">${best} classes to <b>play</b>, ${worst} to <b>fold</b>, ${rows.length - best - worst} marginal or undecided. Best first.</p>
+      <div class="scroll"><table><thead><tr><th>Hand</th><th>Verdict</th><th>Edge vs fold</th><th></th><th>±95% CI</th><th>Result when played</th><th>Played</th><th>Hands</th></tr></thead><tbody>`;
+    for (const r of rows) {
+      const v = VERDICT[r.verdict];
+      const w = Math.min(50, 50 * Math.abs(r.edge) / (max || 1));
+      const sig = r.verdict === "play" || r.verdict === "fold";
+      const col = sig ? (r.edge >= 0 ? "var(--pos-4)" : "var(--neg-4)") : "var(--neutral)";
+      html += `<tr><td><b>${r.name}</b></td><td><span class="verdict" style="color:${v.color}">${v.icon} ${v.label}</span></td>
+        <td>${r.play.n ? fmt(r.edge) : "–"}</td>
+        <td><span class="edgebar"><i style="background:${col};${r.edge >= 0 ? `left:50%;width:${w}%` : `right:50%;width:${w}%`}"></i></span></td>
+        <td class="muted">${isFinite(r.edgeSe) ? (1.96 * r.edgeSe).toFixed(2) : "–"}</td>
+        <td>${r.play.n ? fmt(r.play.mean) : "–"}</td><td>${(100 * r.rate).toFixed(0)}%</td><td>${fmtN(r.all.n)}</td></tr>`;
+    }
+    $("start-body").innerHTML = html + `</tbody></table></div>` + legend;
+  }
+}
+function startTip(r) {
+  const v = VERDICT[r.verdict];
+  return `<b>${r.name}</b> · <span style="color:${v.color}">${v.icon} ${v.label}</span><br>
+    Edge vs folding: ${r.play.n ? fmt(r.edge) : "–"} ± ${isFinite(r.edgeSe) ? (1.96 * r.edgeSe).toFixed(2) : "–"} ${D.unit}<br>
+    Result when played: ${r.play.n ? fmt(r.play.mean) : "–"} · when folded: ${fmt(r.foldEv)}<br>
+    Played ${(100 * r.rate).toFixed(0)}% of ${fmtN(r.all.n)} hands`;
+}
+
+// ---- decisions matrix ----
+const ACTION_ORDER = ["fold", "check", "call", "bet ≤⅓ pot", "bet ≤⅔ pot", "bet ~pot", "bet overbet", "bet all-in"];
+const streets = [...new Set(D.study.decisions.map((r) => r.street))].sort((a, b) => a - b);
+$("street").innerHTML = streets.map((s) => `<option value="${s}">${L.streets[s] ?? "street " + s}</option>`).join("");
+$("street").value = store.get("street", String(streets[Math.min(1, streets.length - 1)] ?? 0));
+if (![...$("street").options].some((o) => o.value === $("street").value) && streets.length) $("street").value = String(streets[0]);
+const rowsMode = { v: store.get("rows", "strength") };
+seg($("rows"), [["strength", "Hand strength"], ["board", "Board"]], rowsMode, "rows", renderDecisions);
+
+function fillBoards() {
+  const st = +$("street").value;
+  const used = [...new Set(D.study.decisions.filter((r) => r.street === st).map((r) => r.board))].sort((a, b) => a - b);
+  const prev = $("board").value || store.get("board", "all");
+  const label = rowsMode.v === "board" ? "Hand strength" : "Board";
+  $("board-wrap").firstChild.textContent = label + " ";
+  if (rowsMode.v === "board") {
+    const ss = [...new Set(D.study.decisions.filter((r) => r.street === st).map((r) => r.strength))].sort((a, b) => a - b);
+    $("board").innerHTML = `<option value="all">All strengths</option>` + ss.map((s) => `<option value="${s}">${L.strengths[s] ?? s}</option>`).join("");
+  } else {
+    $("board").innerHTML = `<option value="all">All boards</option>` + used.map((b) => `<option value="${b}">${L.boards[b] ?? b}</option>`).join("");
+  }
+  $("board").value = [...$("board").options].some((o) => o.value === prev) ? prev : "all";
+}
+
+function renderDecisions() {
+  fillBoards();
+  const st = +$("street").value, filt = $("board").value, minn = +$("minn").value;
+  store.set("street", String(st)); store.set("board", filt);
+  const rowKey = rowsMode.v === "board" ? "board" : "strength";
+  const filterKey = rowsMode.v === "board" ? "strength" : "board";
+  const rowLabel = (k) => rowKey === "board" ? (L.boards[k] ?? k) : (L.strengths[k] ?? k);
+  const cells = {}; const actions = new Set();
+  for (const r of D.study.decisions) {
+    if (r.street !== st) continue;
+    if (filt !== "all" && r[filterKey] !== +filt) continue;
+    const row = cells[r[rowKey]] || (cells[r[rowKey]] = {});
+    row[r.action] = merge(row[r.action] || W(), r.stat);
+    actions.add(r.action);
+  }
+  const cols = [...ACTION_ORDER.filter((a) => actions.has(a)), ...[...actions].filter((a) => !ACTION_ORDER.includes(a)).sort()];
+  const keys = Object.keys(cells).map(Number).sort((a, b) => a - b);
+  if (!keys.length) { $("dec-body").innerHTML = `<p class="muted">No decisions recorded for this filter yet.</p>`; $("dec-legend").innerHTML = ""; return; }
+  const vals = []; for (const k of keys) for (const a of cols) { const w = cells[k][a]; if (w && w.n >= minn) vals.push(w.mean); }
+  const max = scaleMax(vals);
+  let html = `<table class="mx"><thead><tr><th>${rowKey === "board" ? "Board" : "Your hand"}</th>${cols.map((a) => `<th>${a}</th>`).join("")}<th>Best</th></tr></thead><tbody>`;
+  for (const k of keys) {
+    const row = cells[k];
+    let best = null;
+    for (const a of cols) { const w = row[a]; if (w && w.n >= minn && (!best || w.mean > row[best].mean)) best = a; }
+    html += `<tr><td style="text-align:left">${rowLabel(k)}</td>`;
+    for (const a of cols) {
+      const w = row[a];
+      if (!w) { html += `<td class="c thin">–</td>`; continue; }
+      const thin = w.n < minn;
+      const c = divColor(w.mean, max, !thin);
+      html += `<td class="c${thin ? " thin" : c.tx}${a === best ? " best" : ""}" style="background:${thin ? "transparent" : c.bg}"
+        data-k="${k}" data-a="${encodeURIComponent(a)}">${fmt(w.mean)}<br><small>${fmtN(w.n)}</small></td>`;
+    }
+    html += `<td style="text-align:left"><b>${best ?? "–"}</b></td></tr>`;
+  }
+  $("dec-body").innerHTML = html + `</tbody></table>`;
+  $("dec-body").querySelectorAll("td[data-k]").forEach((el) => hover(el, () => {
+    const a = decodeURIComponent(el.dataset.a), w = cells[el.dataset.k][a];
+    return `<b>${rowLabel(+el.dataset.k)}</b><br>${L.streets[st] ?? ""} · <b>${a}</b><br>
+      Result: ${fmt(w.mean)} ± ${isFinite(se(w)) ? (1.96 * se(w)).toFixed(2) : "–"} ${D.unit} per hand<br>${fmtN(w.n)} decisions${w.n < minn ? " (below the sample minimum)" : ""}`;
+  }));
+  $("dec-legend").innerHTML = `<span><span class="sw" style="background:var(--pos-4)"></span>Hand won chips on average</span>
+    <span><span class="sw" style="background:var(--neg-4)"></span>Hand lost chips on average</span>
+    <span><span class="sw" style="outline:2px solid var(--text-primary);outline-offset:-2px;background:transparent"></span>Best action in the row</span>
+    <span class="muted">Small number = decisions observed. Grey text = below the sample minimum.</span>`;
+}
+
+// ---- population results ----
+$("bots").innerHTML = `<table><thead><tr><th>Bot</th><th>Result per hand</th><th>±95% CI</th></tr></thead><tbody>` +
+  D.results.map((b) => `<tr><td>${b.bot}</td><td>${fmt(b.per_hand, 3)}</td><td class="muted">${b.ci95.toFixed(3)}</td></tr>`).join("") +
+  `</tbody></table>`;
+
+// ---- tooltip ----
+const tip = $("tip");
+function hover(el, html) {
+  el.addEventListener("mouseenter", () => { tip.innerHTML = html(); tip.style.display = "block"; });
+  el.addEventListener("mousemove", (e) => {
+    const x = Math.min(e.clientX + 14, window.innerWidth - tip.offsetWidth - 8);
+    const y = Math.min(e.clientY + 14, window.innerHeight - tip.offsetHeight - 8);
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+  });
+  el.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+}
+
+$("pos").onchange = () => { store.set("pos", $("pos").value); renderStart(); };
+$("street").onchange = () => { $("board").value = "all"; renderDecisions(); };
+$("board").onchange = renderDecisions;
+$("minn").onchange = renderDecisions;
+if (!D.study.start.length) $("start-card").style.display = "none";
+renderStart();
+renderDecisions();
+
+const ar = $("autorefresh");
+ar.checked = store.get("autorefresh", false);
+ar.onchange = () => store.set("autorefresh", ar.checked);
+setInterval(() => { if (ar.checked) location.reload(); }, 60000);
+</script>
+</body>
+</html>

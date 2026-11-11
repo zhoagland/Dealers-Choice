@@ -115,7 +115,9 @@ playout ≈ determinize + ~10–30 `apply` calls + `observe`/hash at tree nodes 
 - **Hold'em scope:** full HUNL needs card abstraction (equity buckets) plus action abstraction.
   Without them it is intractable: Johanson (2013) counts ~10¹⁶¹ information sets for 200 bb HUNL; 20 bb stacks shrink that by many orders of magnitude, but it's still far beyond tabular. **This is a stretch goal after M6.** It
   needs an `Abstraction` trait mapping `Observation → bucket key`, which the table key would use instead
-  of the raw observation. Planned, not v1.
+  of the raw observation. **Phase 2 (S6):** `games::holdem_abstract` is the abstracted heads-up game
+  (8 equity buckets, pot/all-in bets, at most 2 raises a street) that `dc train` solves; see
+  `sim-program.md` S6.
 - **Off-menu actions** (a human bets 0.8 pot when the menu has ⅔ and 1): map to the menu
   with pseudo-harmonic mapping (Ganzfried & Sandholm, 2013). Only needed for MCCFR bots;
   ISMCTS searches from the true state.
@@ -177,6 +179,21 @@ Output: the FR-EV-1 table.
 
 ## 6. External policies (FR-BT-8, post-v1)
 
+**Built (2026-11-11)** in `crates/sim/src/external.rs`. Name the bot `ext:<spec.toml>` anywhere a bot is
+accepted (`dc sim --bots`, campaign populations). The spec gives the model name, transport (`stdio`: a local
+program, one JSON request and one reply per line; `http`: POST JSON, bearer key from an environment variable),
+timeout, concurrency (a pool of programs or requests in flight), fallback bot and an optional cache file.
+Example: `config/external/example.toml` with `tools/external_bot_example.py`. `dc sim` prints per-model
+decisions, cache hits, calls, mean/max latency and fallbacks. As built vs the sketch below: the cache key is
+SHA-256 of the whole request (model, game, observation, legal actions); the transports are synchronous behind a
+shared pool rather than an async runner (sims already run hands in parallel); the request also carries a
+readable label per legal action. **Jev** has its own transport (`transport = "jev"`, `config/external/jev.toml`):
+each decision is one System One `choice` question at `https://api.typesafe.ai/v1/systemone` (options `a0…` =
+the legal actions, described by their labels; state = the request JSON); the answer's `probabilities` map is the
+distribution, and billed tokens are counted for cost. A test runs it against a local stand-in for the endpoint;
+a live run needs a TypeSafe API key (Jev is in early access).
+
+
 ```rust
 pub struct ExternalPolicy<T: Transport> { transport: T, cache: ResponseCache, fallback: Box<dyn …>, … }
 pub trait Transport { fn decide(&mut self, req: &DecisionRequest) -> Result<Vec<f64>, TransportError>; }
@@ -196,6 +213,21 @@ pub trait Transport { fn decide(&mut self, req: &DecisionRequest) -> Result<Vec<
   measured like any bot: bb/100 vs ISMCTS presets with duplicate deals, plus Kuhn exploitability
   (exact, cheap: ~12 infosets).
 
+## 6b. Exploitative bots (FR-PA-5, post-v1)
+
+**Built (2026-11-11)** in `crates/bots/src/exploit.rs`. When ISMCTS imagines an opponent's hidden cards it
+normally treats every unseen hand as equally likely. An exploit bot weights them by that player's **VPIP**: a
+player who enters 15 % of pots is read as holding the top 15 % of starting hands by the Chen formula. The
+deviation is **capped** (`DEFAULT_CAP` 0.7): hands outside the read keep 30 % weight, so a player who changes
+gears can't lead the bot far astray and the bot stays close to its default strategy.
+
+- `dc play --exploit` (or `exploit = true` in a play profile): the bots read the human's VPIP from their stored
+  hands (`dc stats`), once they have 30 or more.
+- `exploit:<level>:<vpip%>` in sims: ISMCTS at `level` reading every opponent at that VPIP.
+- Scope: two-card hidden hands (the Hold'em family); other games keep uniform sampling. The read applies to the
+  modelled seat whether or not it entered the current pot voluntarily (a checked big blind is read like a
+  caller); the cap bounds that error. A finer model (ranges by position and action) is future work.
+
 ## 7. Coach (FR-EV-3…5)
 
 - **Post-hand:** when a hand ends, the hand record (`engine::replay` format) goes to a background worker
@@ -209,6 +241,13 @@ pub trait Transport { fn decide(&mut self, req: &DecisionRequest) -> Result<Vec<
   the critical path is backlog.
 - **Observed bias (2026-10-10 smoke test):** ISMCTS opponent nodes over-fold to aggression,
   so the coach over-rewards bluffing (e.g. "raise 9-high" scored about 12 bb better than calling).
+- **Rollout fix (backlog #1, 2026-11-11):** ISMCTS now defaults to `Rollout::Heuristic`, which uses the
+  game's `decision_context` hand-strength category below the tree: facing a bet after the first round with
+  nothing it mostly folds; with trips+ it sometimes raises; with two pair+ and no bet it mostly bets; games
+  without a strength signal keep check/call-down. Measured on a heads-up flop (9c5d on Kh7s2d, checked to
+  hero, 60 k playouts): the best bluff's EV fell from +0.69 to +0.41 bb (less over-rewarded), while
+  check/call went from −0.48 to −1.72 bb (±0.18, few visits). `dc spot --rollout check-call` reproduces the
+  old numbers. Opponent-model determinization (backlog #2) remains the bigger fix.
   Fix candidates: a better rollout policy, opponent-model-weighted determinization (FR-PA-5).
 - **Opponent model caveat (OQ-7):** the evaluation assumes opponents play like MO-ISMCTS does. The
   coach says "against this bot's model," not "GTO."

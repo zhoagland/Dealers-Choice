@@ -16,15 +16,15 @@ use std::time::Duration;
 use rand::Rng;
 use rand::seq::IndexedRandom;
 
-use bots::coach::{DecisionReview, review_hand};
+use bots::coach::{DecisionReview, review_hand_with};
 use bots::ismcts::{Ismcts, IsmctsConfig};
-use bots::{Budget, IsmctsBot, Policy, play_hand};
-use engine::replay::replay;
+use bots::{Budget, IsmctsBot, Policy, play_hand_with};
 use engine::rng::{Stream, derive_rng, rng_from_seed};
 use engine::session::{SeatInfo, SeatKind, SessionEvent, Table};
-use engine::{Chips, Game, Seat, StakeModel};
+use engine::showdown::{folded_seats, may_show, own_hidden_cards};
+use engine::{Chips, Game, GameCarry, Seat, StakeModel};
 use games::registry::{GAME_IDS, GameVisitor, with_game};
-use sim::encoding::{HandRecord, encode};
+use sim::encoding::{HandRecord, encode, encode_carry};
 use storage::{DataRoot, Db, LedgerKind, Note, ProfileKind, ProfileStore, StoredHand};
 
 use crate::CliResult;
@@ -129,7 +129,31 @@ pub fn run(args: PlayArgs, root: &DataRoot, profiles: &ProfileStore) -> CliResul
             sitting_out: false,
         });
     }
+    // FR-PA-5: bots read the human's stored VPIP when they imagine the human's cards.
+    let read = match (&persist, s.exploit) {
+        (Some(p), true) => match crate::stats::vpip(&p.db, p.player_id) {
+            Some((v, n)) if n >= 30 => {
+                println!(
+                    "Exploit bots: reading you as a {:.0}% VPIP player ({n} hands).",
+                    v * 100.0
+                );
+                Some(v)
+            }
+            _ => {
+                println!(
+                    "Exploit bots: fewer than 30 stored hands, so the bots play their default."
+                );
+                None
+            }
+        },
+        (None, true) => {
+            println!("Exploit bots need your stored hands; --no-save turns them off.");
+            None
+        }
+        _ => None,
+    };
     let mut table = Table::new(seats, Chips::dollars(100.0));
+    table.out_is_out = s.out_is_out;
     let mut chooser_rng = derive_rng(seed, 0, Stream::Custom(1));
     let mut hand_counter = 0u64;
 
@@ -141,6 +165,7 @@ pub fn run(args: PlayArgs, root: &DataRoot, profiles: &ProfileStore) -> CliResul
             seed,
             hand_counter: &mut hand_counter,
             persist: persist.as_mut(),
+            read,
         };
         with_game(&id, None, visitor).map_err(|e| e.to_string())??;
         let you = table.seats[0].bankroll.unwrap_or_default();
@@ -215,6 +240,8 @@ struct PlayOneGame<'a> {
     seed: u64,
     hand_counter: &'a mut u64,
     persist: Option<&'a mut Persist>,
+    /// The human's VPIP, for exploit bots.
+    read: Option<f64>,
 }
 
 impl GameVisitor<CliResult> for PlayOneGame<'_> {
@@ -232,7 +259,9 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
             if hands == 1 { "" } else { "s" }
         );
 
-        while let Some((setup, map)) = table.next_hand() {
+        // Carried state between the hands of an `UntilDone` game (`()` for other games).
+        let mut carry = GameCarry::new(&game);
+        while let Some((setup, map)) = table.next_hand_excluding(carry.seats_out(&game)) {
             *self.hand_counter += 1;
             let hand = *self.hand_counter;
 
@@ -254,6 +283,15 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
                                 .and_then(|l| l.parse().ok())
                                 .unwrap_or(5);
                             let mut bot = IsmctsBot::<G>::preset(level, true);
+                            if let (Some(v), Some(h)) =
+                                (self.read, map.iter().position(|&t| t == 0))
+                            {
+                                let models = [(engine::Seat(h as u8), v)].into_iter().collect();
+                                bot.set_sampler(Box::new(bots::exploit::sampler(
+                                    &models,
+                                    bots::exploit::DEFAULT_CAP,
+                                )));
+                            }
                             // Strong presets would think longer than the table's cap (PRD A6, --think-ms).
                             if let Budget::Time(t) = bot.strength.budget {
                                 bot.strength.budget = Budget::Time(
@@ -275,14 +313,20 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
             let mut rngs: Vec<_> = (0..map.len())
                 .map(|i| derive_rng(self.seed, hand, Stream::Seat(i as u8)))
                 .collect();
-            let result = play_hand(&game, &setup, &mut seats, &mut deal, &mut rngs);
+            let (result, end) = play_hand_with(
+                &game,
+                &setup,
+                carry.carry(),
+                &mut seats,
+                &mut deal,
+                &mut rngs,
+            );
 
             // Show the end of the hand from the human's seat.
             let human_seat = map
                 .iter()
                 .position(|&t| table.seats[t].kind == SeatKind::Human)
                 .map(|i| Seat(i as u8));
-            let end = replay(&game, &setup, &result.actions).map_err(|e| e.to_string())?;
             if let Some(h) = human_seat {
                 println!("\n{}", game.describe_observation(&game.observe(&end, h)));
             }
@@ -293,13 +337,33 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
                     result.payoffs[i].to_string()
                 );
             }
+            // Optional show (G-3): a human who lost at showdown may show instead of mucking.
+            // Bots always muck.
+            let mut shown_by_choice = Vec::new();
+            for p in may_show(&game, &end) {
+                if Some(p) != human_seat {
+                    continue;
+                }
+                let cards = own_hidden_cards(&game, &end, p);
+                let list: Vec<String> = cards.iter().map(|c| c.to_string()).collect();
+                let answer = read_line(&format!("Show your hand ({})? [y/N] ", list.join(" ")));
+                if answer.eq_ignore_ascii_case("y") {
+                    println!(
+                        "  {} shows {}",
+                        table.seats[map[p.index()]].name,
+                        list.join(" ")
+                    );
+                    shown_by_choice.push(p.0);
+                }
+            }
             let mut reviews: Vec<DecisionReview<G::Action>> = Vec::new();
             if let (Some(h), true) = (human_seat, self.settings.review) {
                 let mut search = Ismcts::<G>::new(IsmctsConfig::default());
                 let mut rng = rng_from_seed(self.seed ^ hand);
-                reviews = review_hand(
+                reviews = review_hand_with(
                     &game,
                     &setup,
+                    carry.carry(),
                     &result.actions,
                     h,
                     &mut search,
@@ -309,15 +373,18 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
                 print_review(&game, &reviews);
             }
             if let (Some(p), Some(h)) = (self.persist.as_deref_mut(), human_seat) {
-                let record = encode(&HandRecord::new(
+                let mut rec = HandRecord::new(
                     game.meta().id,
                     game.meta().version,
                     hand,
                     0,
                     map.iter().map(|&t| t as u8).collect(),
                     setup.clone(),
+                    encode_carry(carry.carry()),
                     result.actions.clone(),
-                ));
+                );
+                rec.shown_by_choice = shown_by_choice.clone();
+                let record = encode(&rec);
                 let stored = StoredHand {
                     session_id: p.session_id,
                     player_id: p.player_id,
@@ -339,6 +406,10 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
                 p.db.store_hand(&stored).map_err(|e| e.to_string())?;
             }
             table.settle_hand(&map, &result.payoffs);
+            table.mark_folded(&map, folded_seats(&game, &end));
+            if carry.finish_hand(&game, &end, &result.payoffs).game_over {
+                table.finish_game_early();
+            }
 
             for t in table.busted() {
                 if table.seats[t].kind == SeatKind::Bot {
@@ -360,6 +431,21 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
             }
             if let Some(p) = self.persist.as_deref_mut() {
                 p.record(table, stake)?;
+            }
+        }
+        // An `UntilDone` game that hit its hand cap (or ran out of players) with a pot still
+        // carried: pay it out (D-G0-1).
+        if let Some(game_seats) = table.game_seats().map(<[usize]>::to_vec) {
+            let n = game_seats.len() as u8;
+            let eligible = table.game_eligible(carry.seats_out(&game));
+            if let Some(pay) = carry.close(&game, n, eligible, (1u16 << n) - 1) {
+                println!("  carried pot split:");
+                for (&t, p) in game_seats.iter().zip(&pay) {
+                    if *p != Chips::ZERO {
+                        println!("  {:<10} {:>+9}", table.seats[t].name, p.to_string());
+                    }
+                }
+                table.settle_carry(&game_seats, &pay);
             }
         }
         table.end_game();

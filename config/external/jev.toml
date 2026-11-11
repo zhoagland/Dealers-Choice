@@ -1,0 +1,16 @@
+# Jev (TypeSafe "System One", FR-BT-8). Needs early access and an API key:
+#   $env:TYPESAFE_API_KEY = '<key from console.typesafe.ai>'
+#   dc sim --game holdem_nl --bots ext:config/external/jev.toml,ismcts:5 --deals 200
+# Each decision is one `choice` question (options = legal actions) sent to
+# https://api.typesafe.ai/v1/systemone; the reply's probabilities are sampled with the seat's RNG.
+# Answers are cached, so re-running the same seeds costs nothing. Billed tokens print after the run.
+
+model = "jev-latest"               # cache key and report label
+transport = "jev"
+jev_model = "jev-latest"           # pin a version (e.g. from the reply's "model") for reproducible studies
+api_key_env = "TYPESAFE_API_KEY"
+timeout_ms = 15000
+concurrency = 4                    # requests in flight; lower it if you hit rate limits
+fallback = "ismcts:3"
+cache = "data/external/jev-latest.jsonl"
+# instructions = "…"               # optional: override the question text

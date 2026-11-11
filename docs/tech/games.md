@@ -143,6 +143,81 @@ each over the seat's 7 cards. Both are computed only at showdown and for bot rol
 **Rule tests**: Queen as the last upcard ⇒ no wilds; Q→Q ⇒ Queens wild; Q→Q→…→Q→5 ⇒ fives wild; a Both declarer
 tying low loses everything; a side nobody declared rolls to the other side.
 
+## Scripted games (Phase 2, catalog G1–G7)
+
+One driver, `games::script::Scripted`, runs every game that is "deal, bet, maybe draw or declare,
+show down". A game is a `Script` in `script/games.rs`: its steps (`Down`, `Up`, `Board`, `Bet`,
+`Declare`, `Draw`, `Discard`, `RedRiver`), the hand rule per pot share (`Build::{Any, Exactly, Own}` ×
+`Ranking::{High, LowA6, Low27, Badugi, ShortDeck, SpadeHigh, SpadeLow, HighCard}`), who opens betting
+(`LeftOfButton`, `BestBoard`, `LowBoard`) and what each seat sees (`Normal`, `Indian`, `Showtime`).
+Pots go through `engine::pot::award_shares`; declarations map to `Claim`s. Determinization replays
+the public events with sampled hidden cards (draws included). D-DRAW-1: when the stock runs out the
+discards are reshuffled (a public event); determinization then links each recycled deal to a card
+thrown away before it. Variations are named `Variant`s switched on with `variants = ["…"]`.
+
+Multi-hand games (G8) use `GameLength::UntilDone` with `ScriptCarry` (carried pot, legs, strikes, seats
+out, Tempest's ante level). A `Resolution` mode settles each hand: `Legs`, `Drop`, `Strikes`,
+`Declarer` or `Tempest`. Stuns use `engine::pot::stun_amounts` with `Config::stun_step` (OQ-9). Carried
+pots are not split into side pots. Every game id is in
+`script::games::SCRIPTED_IDS` and the registry.
+
+Shared rules: D-ALL-1 money (chooser's $2 dealer ante, spread 50¢–$2, 4 bets/street; `structure =
+"PotLimit"` in config for pot limit), cards one at a time from the dealer's left, declarations and draws
+in turn from the dealer's left (declarations hidden until all are in), every live hand shown at
+showdown, burns not modelled. **D-HE-1** Hold'em variants play best five of hole + board (the Bible's
+"2 hole + 3 community" sentence is copied from its Texas Hold'em section, which plays any five).
+
+| Id | Game | Shape | Hands | Decisions |
+|---|---|---|---|---|
+| `omaha_pl` | Pot Limit Omaha | 4 down, flop/turn/river | 2o2 high | D-ALL-1 |
+| `omaha5` | 5 Card Omaha | 5 down, flop/turn/river, declare | 2o2 high + A-6 low | D-5CO-1/2, `high_only` |
+| `courchevel` | Courchevel | 5 down + 1 board up, then flop rest/turn/river, declare | 2o2 hi/lo | D-COU-1/2, `high_only` |
+| `red_river` | Red River | PLO + river+1, repeat while red, declare | 2o2 hi/lo | D-RR-1/2/3 |
+| `plo_double_board` | PLO Double Board Bomb Pot | $1 ante each, 2 boards, declare Top/Bottom/Both | 2o2 high per board | D-DB-1/2 (owner) |
+| `holdem_6plus` | 6+ Hold'em | 36 cards | short-deck high | D-6P-1 |
+| `holdem_showtime` | Showtime Hold'em | folded hands face up | high | |
+| `reverse_poker` | Reverse Poker | 5 down, 2-card board one at a time | high, any 5 of 7 | |
+| `holdem_split` | Split Hold'em | 2 boards, declare Top/Bottom/Both | high per board | |
+| `stud7` | 7 Card Stud | 2 down, bet, 4 up, 1 down | high | D-STUD-1 |
+| `razz` | Razz | stud | A-6 low | D-STUD-1 (lowest board first) |
+| `chicago_high` | Chicago High | stud | high + highest spade half | D-CHI-1/2 (owner) |
+| `chicago_low` | Chicago Low | stud | high + lowest spade half | D-CHI-1/2 (owner) |
+| `indian_poker` | Indian Poker | 1 card on your forehead, 1 bet | high card | D-IP-1 |
+| `holdem_indian` | Indian Texas Hold'em | Hold'em, hole cards seen by all but you | high | |
+| `draw5` | 5 Card Draw | 5 down, 1 draw (up to 5) | high | D-5CD-1, D-DRAW-1 |
+| `triple_draw` | Triple Draw | 3 draws | A-6 low | D-DRAW-1 |
+| `draw27_single` | 2-7 Single Draw | 1 draw | 2-7 low | D-DRAW-1 |
+| `draw27_triple` | 2-7 Triple Draw | 3 draws | 2-7 low | D-DRAW-1 |
+| `badugi` | Badugi | 4 down, 3 draws | Badugi | D-BAD-1 |
+| `three_blind_mice` | 3 Blind Mice | draw 3 (4 with a shown Ace), 3-card board | high, best 5 of 8 | D-3BM-1, `flip_one_at_a_time` |
+| `crazy_pineapple` | Crazy Pineapple | 3 down, discard 1 after the flop | high | D-CP-1 |
+| `mamas_favorite` | Mama's Favorite | 6 down in 3 secret pairs, throw a pair after flop and turn | high | D-MF-1 |
+| `holdem_swap` | Swap Hold'em | swap 1-2 cards instead of folding | high | D-SW-1 (owner) |
+| `fusion` | Fusion | Hold'em + a hole card after flop and turn | high | D-FU-1, `hi_lo` |
+| `pass_the_trash` | Pass the Trash | 7 down; pass 3/2/1 in the chooser's direction; throw 2; ordered reveals | hi/lo declare | D-PT-1/2/3 |
+| `man_or_mouse` | Man or Mouse | 7 down + 1 community; pass 2; In/Out | hi/lo declare | D-MM-1, `five_card_start` |
+| `game_43` | 43 | 4 down; In/Out for $1; 3 more | hi/lo declare | D-43-1 |
+| `elevator` | Elevator | 4 down; H of 7 flipped red set, black set, centre | 2o2 from one line, hi/lo declare | D-ELV-1, `two_at_a_time` |
+| `wheel_of_death` | Wheel of Death | 4 down; ring of 9 flipped in 3 spaced sets | 2o2 + 3 consecutive, hi/lo declare | `eight_cards`, `flip_one_at_a_time` |
+| `spit` | Spit | 5 down; throw 1 into a middle of 9; flip one per street | 2o2 + any 3 middle, hi/lo declare | D-SPIT-1/2/3, `three_at_a_time` |
+| `industrial_elevator` | Industrial Elevator | 5 down; column of 4 crossed by a row | 2+3 or 3+2 from one line, high | D-IE-1/2, `five_in_elevator` |
+| `iron_cross` | Iron Cross | $1 ante; 4 down; one bet; cross of 5 turned | best 5 of hole + row or column | D-IC-1/2 |
+| `baseball` | Baseball | stud; face-up 4 earns an extra card (up or down) | 3s and 6s wild, hi/lo declare | D-BB-1/2 |
+| `low_in_the_hole` | Low in the Hole | stud; 7th card up or down by choice | lowest hole rank wild per seat, hi/lo declare | D-LH-1 |
+| `push` | Push | stud; push an up card on for $1, receiver keeps or replaces for $1 | hi/lo declare | D-PU-1/2, `buy_eighth` |
+| `bullet` | Bullet | jokers; 2 down, then take-a-card rounds to 5 | face-down jokers wild, face-up joker kills, hi/lo | D-BU-1/2/3 |
+| `bid` | Bid | 2 down; 5 rounds of middle cards picked in sealed-bid order | hi/lo declare | D-BID-1, `buy_eighth` |
+| `guts_leg` | Guts Leg | 5 Card Draw (3, or 4 with an Ace) repeated; carried pot | high; 2 legs take the pot | D-GL-1/2/3, `out_is_out` |
+| `drop_321` | 3-2-1 Drop | 3 cards, red kings wild, hold or drop; lone player vs the dummy | 3-card high; stuns | D-DROP-1..4 |
+| `three_five_seven` | 3-5-7 | cycles of 3/5/7 cards (3s/5s/7s wild), play or drop each round | strikes and stuns; 3 strikes take the pot | D-357-1 (owner), D-357-2/3 |
+| `scare_a_moosh` | Scare-a-moosh | name the game and price; In/Out; draw; bet | named: high, low, high/low numbers | D-SAM-1..4, `stay_in` |
+| `holdem_tempest` | Tempest Hold'em | rising antes, $2 Giant Blind, all-in or fold, $20 cap; until a showdown | high | D-TEM-1 (owner) |
+| `seven_27` | 7/27 | 1 down 1 up; hit/stand rounds with betting until all stand; declare 7 / 27 / Both | closest without going over | D-727-1/2/3, `bluff_bust` |
+| `five_21` | 5.5/21.5 | as 7/27 with targets 5.5 and 21.5 | closest without going over | D-727-1/2/3, `bluff_bust` |
+| `numbers` | Numbers | 6 down; 4 middle flips throw away matching and neighbouring ranks; gin scoops | high/low card totals, declare | D-NUM-1/2/3, `five_cards`, `seven_cards` |
+| `booray` | Whooh Ray for Booray | 5 cards (dealer's last face up = trump); In/Out; draw; 5 tricks | 3 tricks scoop; no trick fries; others pay $1 | D-BOO-1..5, `out_is_out` |
+| `blackjack` | Blackjack | own driver (`blackjack.rs`): chooser is the bank, sets the max; bets, hit/stand/double/split | vs the bank; blackjack 3:2 | D-BJ-1/2 (owner), D-BJ-3..7 |
+
 ## Open questions
 - ~~G-1~~ Resolved: FTQ max 7 seats.
 - ~~G-2~~ Resolved: Q followed by Q ⇒ Queens wild.

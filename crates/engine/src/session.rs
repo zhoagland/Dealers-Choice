@@ -8,8 +8,13 @@
 //!   stake from bankroll to stack and cashing out moves the remainder back. For `Bankroll`
 //!   games the stack *is* the bankroll (bots get `bot_stack`).
 //!
-//! A game is one hand by default, or one orbit (`GameLength`). After each game, the seat to the
-//! chooser's left chooses next.
+//! A game is one hand by default, one orbit, or (`UntilDone`) as many hands as it takes
+//! (`GameLength`). After each game, the seat to the chooser's left chooses next.
+//!
+//! `UntilDone` games keep the same seats for the whole game, so the game's carried state
+//! (`Game::Carry`) can refer to seats by number: seats that can't play a hand stay in the
+//! `HandSetup` and are flagged in `dealt_out`. The caller ends the game with
+//! [`Table::finish_game_early`] once `Game::game_over` says so.
 
 use serde::{Deserialize, Serialize};
 
@@ -77,6 +82,9 @@ pub struct Table {
     pub chooser: usize,
     /// Stack bots get in `Bankroll`-model games (they have no real bankroll).
     pub bot_stack: Chips,
+    /// "If you're out you're out" (FR-GC-8): in `Orbit` and `UntilDone` games, a seat that
+    /// folds sits out the rest of that game. Set by the session's host.
+    pub out_is_out: bool,
     /// The game in progress.
     current: Option<GameInProgress>,
     events: Vec<SessionEvent>,
@@ -87,6 +95,8 @@ struct GameInProgress {
     stake: StakeModel,
     hands_total: usize,
     hands_played: usize,
+    /// `UntilDone` only: the table indices in the game, fixed at the start.
+    fixed_seats: Option<Vec<usize>>,
 }
 
 impl Table {
@@ -96,6 +106,7 @@ impl Table {
             seats,
             chooser: 0,
             bot_stack,
+            out_is_out: false,
             current: None,
             events: Vec::new(),
         }
@@ -121,14 +132,16 @@ impl Table {
             self.seats[i].sitting_out = false;
             self.buy_in(i, meta.stake_model);
         }
-        let hands_total = match meta.length {
-            GameLength::SingleHand => 1,
-            GameLength::Orbit => self.seats.len(),
+        let (hands_total, fixed_seats) = match meta.length {
+            GameLength::SingleHand => (1, None),
+            GameLength::Orbit => (self.seats.len(), None),
+            GameLength::UntilDone { max_hands } => (max_hands as usize, Some(self.active())),
         };
         self.current = Some(GameInProgress {
             stake: meta.stake_model,
             hands_total,
             hands_played: 0,
+            fixed_seats,
         });
         hands_total
     }
@@ -163,9 +176,18 @@ impl Table {
     /// Setup for the next hand, plus the map from hand seat → table index. `None` if the game is
     /// over or fewer than two players can play.
     pub fn next_hand(&self) -> Option<(HandSetup, Vec<usize>)> {
+        self.next_hand_excluding(0)
+    }
+
+    /// [`Table::next_hand`] for `UntilDone` games, also dealing out `game_out` (game seats the
+    /// game has removed: [`crate::Game::seats_out`]). Ignored for other game lengths.
+    pub fn next_hand_excluding(&self, game_out: u16) -> Option<(HandSetup, Vec<usize>)> {
         let g = self.current.as_ref()?;
         if g.hands_played >= g.hands_total {
             return None;
+        }
+        if let Some(fixed) = &g.fixed_seats {
+            return self.next_fixed_hand(g, fixed, game_out);
         }
         let active = self.active();
         if active.len() < 2 {
@@ -189,8 +211,101 @@ impl Table {
             chooser: to_hand(chooser_table),
             first_hand_of_game: g.hands_played == 0,
             stacks: active.iter().map(|&i| self.seats[i].stack).collect(),
+            dealt_out: 0,
         };
         Some((setup, active))
+    }
+
+    /// `UntilDone`: every seat that started the game, with the ones that can't play this hand
+    /// flagged. The button moves one game seat per hand, starting at the chooser.
+    fn next_fixed_hand(
+        &self,
+        g: &GameInProgress,
+        fixed: &[usize],
+        game_out: u16,
+    ) -> Option<(HandSetup, Vec<usize>)> {
+        let dealt_out = self.fixed_seats_out(fixed) | game_out;
+        if fixed.len() - (dealt_out.count_ones() as usize) < 2 {
+            return None;
+        }
+        let n = fixed.len();
+        let chooser = fixed.iter().position(|&i| i == self.chooser).unwrap_or(0);
+        // The button skips seats that are dealt out.
+        let button = (0..n)
+            .map(|k| (chooser + g.hands_played + k) % n)
+            .find(|&k| dealt_out & (1 << k) == 0)
+            .unwrap();
+        let setup = HandSetup {
+            num_seats: n as u8,
+            button: Seat(button as u8),
+            chooser: Seat(chooser as u8),
+            first_hand_of_game: g.hands_played == 0,
+            stacks: fixed.iter().map(|&i| self.seats[i].stack).collect(),
+            dealt_out,
+        };
+        Some((setup, fixed.to_vec()))
+    }
+
+    /// Game seats (bitmask over `fixed`) that are busted or sitting out.
+    fn fixed_seats_out(&self, fixed: &[usize]) -> u16 {
+        let out = |i: usize| self.seats[i].sitting_out || self.seats[i].stack == Chips::ZERO;
+        fixed
+            .iter()
+            .enumerate()
+            .filter(|&(_, &i)| out(i))
+            .fold(0u16, |m, (k, _)| m | 1 << k)
+    }
+
+    /// `UntilDone` only: the table indices in the game (game seat `k` = `game_seats()[k]`).
+    pub fn game_seats(&self) -> Option<&[usize]> {
+        self.current.as_ref()?.fixed_seats.as_deref()
+    }
+
+    /// `UntilDone` only: the game seats (bitmask) that started the game and haven't left it by
+    /// sitting out. Busted seats still count: they may rebuy. Excludes `game_out`.
+    pub fn game_eligible(&self, game_out: u16) -> u16 {
+        let Some(fixed) = self.game_seats() else {
+            return 0;
+        };
+        fixed
+            .iter()
+            .enumerate()
+            .filter(|&(_, &i)| !self.seats[i].sitting_out)
+            .fold(0u16, |m, (k, _)| m | 1 << k)
+            & !game_out
+    }
+
+    /// Pay out a carried pot left when an `UntilDone` game stops without finishing
+    /// ([`crate::Game::settle_carry`]). Not counted as a hand.
+    pub fn settle_carry(&mut self, map: &[usize], payoffs: &[Chips]) {
+        assert!(
+            payoffs.iter().all(|&p| p >= Chips::ZERO),
+            "a carried pot only pays out"
+        );
+        self.settle_hand(map, payoffs);
+        self.current.as_mut().unwrap().hands_played -= 1;
+    }
+
+    /// FR-GC-8: with `out_is_out`, the seats that folded this hand (`folded` over hand seats,
+    /// mapped through `map`) sit out the rest of a multi-hand game. Single-hand games ignore it.
+    pub fn mark_folded(&mut self, map: &[usize], folded: u16) {
+        let multi = self.current.as_ref().is_some_and(|g| g.hands_total > 1);
+        if !self.out_is_out || !multi {
+            return;
+        }
+        for (k, &t) in map.iter().enumerate() {
+            if folded & (1 << k) != 0 && !self.seats[t].sitting_out {
+                self.seats[t].sitting_out = true;
+                self.events.push(SessionEvent::SitOut { seat: t });
+            }
+        }
+    }
+
+    /// End an `UntilDone` game after the current hand (its `Game::game_over` returned true).
+    pub fn finish_game_early(&mut self) {
+        if let Some(g) = self.current.as_mut() {
+            g.hands_total = g.hands_played;
+        }
     }
 
     /// Record a finished hand: apply payoffs (hand seats mapped back through `map`).
@@ -419,6 +534,21 @@ mod tests {
         let (setup, map) = t.next_hand().unwrap();
         assert_eq!(setup.num_seats, 2, "sitting-out seat not dealt");
         assert_eq!(map, vec![1, 2]);
+    }
+
+    #[test]
+    fn out_is_out_sits_folded_seats_out_for_the_rest_of_an_orbit() {
+        let mut t = Table::new(vec![human(10_000), bot("a"), bot("b")], Chips(5_000));
+        t.out_is_out = true;
+        t.begin_game(&meta(StakeModel::Bankroll, GameLength::Orbit));
+        let (_, map) = t.next_hand().unwrap();
+        t.settle_hand(&map, &[Chips(100), Chips(-100), Chips(0)]);
+        t.mark_folded(&map, 0b010); // table seat 1 folded
+        let (setup, map) = t.next_hand().unwrap();
+        assert_eq!(setup.num_seats, 2);
+        assert_eq!(map, vec![0, 2]);
+        t.end_game();
+        assert!(!t.seats[1].sitting_out, "back in for the next game");
     }
 
     #[test]

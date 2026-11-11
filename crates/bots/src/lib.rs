@@ -3,6 +3,7 @@
 
 pub mod baseline;
 pub mod coach;
+pub mod exploit;
 pub mod harness;
 pub mod ismcts;
 pub mod mccfr;
@@ -12,7 +13,7 @@ pub mod ranges;
 pub mod strategy;
 pub mod strength;
 
-pub use harness::{HandResult, play_hand};
+pub use harness::{HandResult, play_hand, play_hand_with};
 pub use policy::{ActionValue, Budget, Evaluator, Policy};
 pub use random::RandomPolicy;
 pub use strategy::{Strategy, UniformStrategy};

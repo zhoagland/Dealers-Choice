@@ -1,0 +1,106 @@
+# Deploy Dealers Choice to the self-hosted runner's machine (deploy/README.md, "Automatic
+# deploys"). A push to main runs CI first (ci.yml), then rebuilds and restarts the app container
+# on the server. It runs only on pushes to main or by hand, never on pull_request events, so
+# unreviewed code can't execute on the self-hosted runner.
+#
+# Server setup (once): a runner registered to this repo with the label `dealers-choice`, and
+# ~/dealers-choice/.env (copy deploy/.env.example).
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: ci
+    runs-on: [self-hosted, dealers-choice]
+    timeout-minutes: 45
+    env:
+      DEPLOY_HOME: /home/proxmox/dealers-choice
+      # Optional repo secret: a Discord channel webhook for deploy results.
+      DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+      COMPOSE_FILE: deploy/docker-compose.yml
+      COMPOSE_PROJECT_NAME: dealers-choice
+      DC_IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve environment
+        run: |
+          # Prefer the runner user's home; fall back to /home/proxmox (where the other apps live).
+          home="${HOME}/dealers-choice"
+          [ -f "$home/.env" ] || home="$DEPLOY_HOME"
+          test -f "$home/.env" || { echo "missing $home/.env (copy deploy/.env.example there)" >&2; exit 1; }
+          echo "COMPOSE_ENV_FILES=$home/.env" >> "$GITHUB_ENV"
+          echo "DEPLOY_HOME=$home" >> "$GITHUB_ENV"
+          port=$(grep -E '^DC_HTTP_PORT=' "$home/.env" | cut -d= -f2)
+          echo "DC_PORT=${port:-8090}" >> "$GITHUB_ENV"
+          # Profiles to run alongside the app (e.g. DC_PROFILES=tunnel in .env).
+          profiles=$(grep -E '^DC_PROFILES=' "$home/.env" | cut -d= -f2)
+          echo "COMPOSE_PROFILES=${profiles}" >> "$GITHUB_ENV"
+          grep -q '^DEV_MODE=1' "$home/.env" && { echo "DEV_MODE=1 is not allowed on the server" >&2; exit 1; } || true
+
+      - name: Back up the database
+        run: |
+          if [ -n "$(docker compose ps -q app 2>/dev/null)" ]; then
+            docker compose exec -T app dc-server --backup "/data/backups/pre-deploy-${GITHUB_SHA::12}.sqlite"
+            # Keep the newest 10 pre-deploy snapshots (nightly ones are pruned by the server).
+            docker compose exec -T app sh -c 'ls -1t /data/backups/pre-deploy-*.sqlite | tail -n +11 | xargs -r rm --' || true
+          else
+            echo "no running app yet; skipping backup"
+          fi
+
+      - name: Build
+        run: docker compose build app
+
+      - name: Start
+        run: |
+          docker compose up -d --force-recreate --no-deps --wait --wait-timeout 180 app
+          if [ -n "$COMPOSE_PROFILES" ]; then docker compose up -d --remove-orphans; fi
+
+      - name: Verify the container runs the new image
+        run: |
+          want=$(docker image inspect -f '{{.Id}}' "dealers-choice:${DC_IMAGE_TAG}")
+          have=$(docker inspect -f '{{.Image}}' "$(docker compose ps -q app)")
+          echo "app: running ${have:7:12}, built ${want:7:12}"
+          test "$want" = "$have"
+
+      - name: Smoke check
+        run: |
+          base="http://127.0.0.1:${DC_PORT}"
+          curl -fsS "$base/healthz"
+          curl -fsS "$base/" | grep -q '<div id="root"'
+          test "$(curl -s -o /dev/null -w '%{http_code}' "$base/api/me")" = "401"
+          # Production rules: no dev login.
+          test "$(curl -s -o /dev/null -w '%{http_code}' "$base/auth/dev?name=x")" = "404"
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail 200 app
+
+      - name: Prune old images
+        if: success()
+        run: |
+          docker image ls dealers-choice --format '{{.Tag}}' | grep -v -x -e "${DC_IMAGE_TAG}" -e local \
+            | xargs -r -I{} docker image rm "dealers-choice:{}" || true
+          docker image prune -f
+
+      - name: Discord notification
+        if: always() && env.DISCORD_WEBHOOK != ''
+        env:
+          STATUS: ${{ job.status }}
+        run: |
+          msg="Dealers Choice deploy ${STATUS}: ${GITHUB_SHA::7} (${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})"
+          curl -fsS -H 'content-type: application/json' -d "{\"content\": \"${msg}\"}" "$DISCORD_WEBHOOK" || true

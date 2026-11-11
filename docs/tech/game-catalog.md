@@ -20,7 +20,7 @@ in a foundation PR or the family that first needs it, and then implements every 
 |---|---|---|---|---|
 | K1 | Multi-hand games with state carried between hands (`UntilDone`, `Carry`) | Guts Leg, 3-2-1 Drop, 3-5-7, Scare-a-moosh, Tempest, Booray | missing (API doc §9) | **G0** (API v2) |
 | K2 | **Stuns**: a penalty paid into the pot, sized "matches the pot up to $10" (Bible §Definitions) | 3-2-1 Drop, 3-5-7, Scare-a-moosh, Booray, Iron Cross / 3-2-1 variants | missing | **G0** (`engine::pot::Penalty`) |
-| K3 | Jokers (54-card deck) | Bullet | `Card(u8)` 0..52, `CardSet(u64)` | **G0** (indices 52, 53; still fit in u64) |
+| K3 | Jokers (54-card deck) | Bullet | `Card(u8)` 0..52, `CardSet(u64)` | **G0, done** (red = 13, black = 29: unused rank slots, invisible to rank masks) |
 | K4 | Pluggable evaluators: Omaha 2o2, 2-7 low, Badugi, short-deck high, 3-card (no straights/flushes), board geometry (lines/wheel/cross), numbers (blackjack values), high/low spade, single high card | most families | high, wild-high, A-6 low | **G0** adds the `Evaluator` framework; each family adds its evaluators, oracle-tested like v1 |
 | K5 | Per-seat wild sets | Low in the Hole, 3-5-7 (table-wide but changing) | table-wide wild rank (FTQ) | G6 (stud) |
 | K6 | N-way pot division with declarations (Top/Bottom board, 7/27, hi/lo numbers, Chicago spade half) | Double Board, Split Hold'em, numbers, Chicago | 2-way hi/lo `award_declared` | **G0** generalizes to `award_shares(shares: &[Share])` |
@@ -72,24 +72,51 @@ Decisions:
 | Hand record v2 = v1 + `carry_in` bytes | recompute carry from previous hands | Each hand stays independently replayable |
 
 Engine work in G0, besides the trait:
-- `Card`: indices 52 = red joker, 53 = black joker; `Deck::with_jokers()`. Evaluators treat a joker as
-  "wild" only when the game passes it in the wild set. Golden RNG test unchanged for 52-card decks.
+- `Card`: red joker = index 13, black joker = index 29 (unused rank slots of the `suit*16+rank` packing, so
+  `rank_mask` never sees them and the evaluators' hot paths are unchanged); `Deck::with_jokers()`,
+  `CardSet::FULL_DECK_WITH_JOKERS`. `CardSet::split_wild(wild)` → (naturals, wild count): a joker in the game's
+  wild set is wild, one outside it is dead (Bullet's face-up joker). Golden RNG test unchanged for 52-card
+  decks. **Done 2026-11-11.** Note for Bullet (G6): a dead joker leaves a 4-card hand, which the evaluators
+  (5–7 cards) don't take yet.
 - `pot::Penalty { seat, amount }` and `stun_amounts(pot_before, stunned_in_order, base_cap, step)` per the
-  stun rule in §3 (cap $10, +$N per additional stunner in the same hand).
+  stun rule in §3 (cap $10, +$N per additional stunner in the same hand). **Done 2026-11-11:** `pot::Penalty`,
+  `pot::StunRule { base_cap, step }` (default $10 / $0) and `pot::stun_amounts(pot_before, stunned, button,
+  stacks, rule)` implementing D-STUN-1/2 and D-G0-2. Games expose `step` as `Config::stun_step` (chooser picks N).
 - Both-declaration fallback (OQ-3, owner decision): if every remaining contestant failed a Both declaration,
   the pot is **split evenly** among them (today it's split as hi/lo). Changes `pot::award_declared`; FTQ's
   `meta.version` bumps.
-- Optional show (G-3): losing players may Show or Muck after required shows.
+- Optional show (G-3): losing players may Show or Muck after required shows. **Done 2026-11-11:** outside the game
+  state machine (it can't change chips, so bots never face it). `engine::showdown::{may_show, own_hidden_cards}`
+  work for any game through `view()`: a seat may show if it lost, didn't fold, and its face-down cards are still
+  hidden. `dc play` asks the human; bots muck. `HandRecord::shown_by_choice` keeps the choice for hand history.
 - `pot::award_shares`: a pot split into named shares (High, Low, Top board, Spade, …), each with its own
   ranking and eligible set, with the existing Both-declaration rule applied per share pair. Replaces
-  `award_declared` (kept as a thin wrapper).
+  `award_declared` (kept as a thin wrapper). **Done 2026-11-11:** `pot::award_shares(pots, shares, claims,
+  order)` with `Share { name, values }` and `Claim::{One(k), All}`; `claims = None` for games without
+  declarations (Chicago). A share nobody can win rolls into the others; odd chips go to earlier shares. OQ-3
+  even split is in; FTQ `meta.version` 1 → 2.
 - `eval::Evaluator` trait + registry so evaluators are reused across games and oracle-tested in one place.
+  **Done 2026-11-11:** `eval::{Evaluator, HandCards { private, board, wild }, EVALUATORS, evaluator(id)}` with
+  `high` and `low_a6`; one test checks every registered evaluator against its oracle (54-card deck, jokers,
+  wild ranks). Hold'em and FTQ keep calling the fast functions directly; new families use the registry.
 - `engine::testing` conformance: C4 (no leaks) learns about inverted information (the observer's *own*
-  cards must vary across determinizations in Indian games; others' cards must not).
+  cards must vary across determinizations in Indian games; others' cards must not). **Done 2026-11-11:**
+  `Conformance::inverted` (set by Indian drivers' tests). At every decision C4 also checks each seat's
+  `view()`: normally a seat may see only its own face-down cards; when inverted, every face-down card but its
+  own. The toy high-card game has an Indian mode; tests prove both mistakes are caught.
 - Session: drive `UntilDone`, persist carry between hands, and support the "if you're out you're out"
-  flag (a seat that folds is excluded from later hands of that game).
+  flag (a seat that folds is excluded from later hands of that game). **Done (2026-11-11):**
+  `engine::GameCarry` drives the hands of one game for the CLI, the sim runner and conformance; two
+  defaulted hooks were added: `Game::seats_out(carry)` (game-removed seats, dealt out by
+  `Table::next_hand_excluding`) and `Game::settle_carry(carry, eligible, n)` (pays a carried pot left at
+  the cap or with < 2 seats; default = D-G0-1 even split). Hand records carry `carry_in`. The sim treats
+  one `UntilDone` game as one deal. Toy `engine::testing::guts_lite` passes conformance with carry
+  replay (exit criterion).
 - Migrate Kuhn, Leduc, Hold'em and FTQ to v2 and bump their `meta.version` (records/blueprints invalidate
-  per handbook §4). Add `view()` for each.
+  per handbook §4). Add `view()` for each. **Done 2026-11-11, one deviation:** only FTQ's version is bumped (its rules
+  changed). Kuhn, Leduc and Hold'em keep version 1: their rules, `Action` and `Observation` are unchanged
+  (handbook §4), so saved Kuhn/Leduc blueprints stay valid. The record layout change is covered by
+  `API_VERSION` 2: `dc stats` skips records from another API version (`sim::encoding::peek_api_version`).
 
 **Exit criteria (G0):** all v1 tests pass on v2; a toy `UntilDone` game (Guts-lite) passes conformance
 including carry replay; CLI play unchanged.

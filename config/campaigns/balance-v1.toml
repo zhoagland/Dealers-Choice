@@ -1,0 +1,12 @@
+# Balance campaign (FR-SP-4, sim-program.md §4.1): how every Bible game plays with cheap bots.
+# `dc campaign plan config/campaigns/balance-v1.toml` shows the runs; `dc campaign run …` runs them.
+name = "balance-v1"
+kind = "balance"
+games = ["all"]
+seats = [2, 4, 6]
+hands_per_run = 20000
+chunk_hands = 10000
+seed = 2026
+
+[population]
+mix = ["random", "callstation", "maniac"]

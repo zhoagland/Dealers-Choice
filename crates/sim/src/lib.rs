@@ -2,10 +2,13 @@
 //! PRD FR-SM-1…4; plan: `docs/tech/sim.md`.
 
 pub mod analytics;
+pub mod balance;
 pub mod encoding;
+pub mod external;
 pub mod runner;
 pub mod spec;
 pub mod stats;
+pub mod study;
 
 pub use runner::{NullSink, RecordSink, RunReport, VecSink, run};
 pub use spec::{BotSpec, RunSpec};

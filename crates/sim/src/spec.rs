@@ -26,18 +26,46 @@ pub enum BotSpec {
     Blueprint {
         path: String,
     },
+    /// ISMCTS at `level` that reads every opponent as a player with this VPIP (percent) when it
+    /// imagines their hidden cards (FR-PA-5, `bots::exploit`).
+    Exploit {
+        level: u8,
+        vpip: u8,
+    },
+    /// An external policy described by a TOML file (FR-BT-8, `external.rs`).
+    External {
+        path: String,
+    },
 }
 
 impl BotSpec {
     /// A fresh bot. Sims always use **playout** budgets: time budgets depend on CPU speed and
     /// would make results irreproducible (tech/README rule 1).
-    pub fn build<G: Game>(&self) -> Box<dyn Policy<G>> {
+    pub fn build<G: Game>(&self, game: &G) -> Box<dyn Policy<G>> {
         match *self {
             BotSpec::Random => Box::new(RandomPolicy),
             BotSpec::CallStation => Box::new(bots::baseline::CallingStation),
             BotSpec::Maniac => Box::new(bots::baseline::Maniac),
             BotSpec::Blueprint { ref path } => {
-                Box::new(BlueprintPolicy::new(cached_blueprint::<G>(path)))
+                Box::new(BlueprintPolicy::new(cached_blueprint::<G>(game, path)))
+            }
+            BotSpec::Exploit { level, vpip } => {
+                let mut bot = IsmctsBot::<G>::new(
+                    bots::Strength::preset(level, false),
+                    bots::Style::default(),
+                    format!("exploit:{level}:{vpip}"),
+                );
+                let models = (0..9u8)
+                    .map(|s| (engine::Seat(s), vpip as f64 / 100.0))
+                    .collect();
+                bot.set_sampler(Box::new(bots::exploit::sampler(
+                    &models,
+                    bots::exploit::DEFAULT_CAP,
+                )));
+                Box::new(bot)
+            }
+            BotSpec::External { ref path } => {
+                Box::new(crate::external::ExternalPolicy::new(game, path))
             }
             BotSpec::Ismcts { level, playouts } => {
                 let mut bot = IsmctsBot::<G>::preset(level, false);
@@ -72,6 +100,11 @@ impl std::str::FromStr for BotSpec {
                 path: path.to_string(),
             });
         }
+        if let Some(path) = s.strip_prefix("ext:") {
+            return Ok(BotSpec::External {
+                path: path.to_string(),
+            });
+        }
         let parts: Vec<&str> = s.split(':').collect();
         let num = |p: &str| {
             p.parse::<u32>()
@@ -85,12 +118,16 @@ impl std::str::FromStr for BotSpec {
                 level: num(l)?.clamp(1, 10) as u8,
                 playouts: None,
             }),
+            ["exploit", l, v] => Ok(BotSpec::Exploit {
+                level: num(l)?.clamp(1, 10) as u8,
+                vpip: num(v)?.clamp(1, 100) as u8,
+            }),
             ["ismcts", l, p] => Ok(BotSpec::Ismcts {
                 level: num(l)?.clamp(1, 10) as u8,
                 playouts: Some(num(p)?),
             }),
             _ => Err(format!(
-                "unknown bot {s:?}: use random, callstation, maniac, ismcts:<level>[:<playouts>], or mccfr:<file>"
+                "unknown bot {s:?}: use random, callstation, maniac, ismcts:<level>[:<playouts>], exploit:<level>:<vpip%>, mccfr:<file>, or ext:<spec.toml>"
             )),
         }
     }
@@ -103,6 +140,8 @@ impl std::fmt::Display for BotSpec {
             BotSpec::CallStation => write!(f, "callstation"),
             BotSpec::Maniac => write!(f, "maniac"),
             BotSpec::Blueprint { path } => write!(f, "mccfr:{path}"),
+            BotSpec::External { path } => write!(f, "ext:{path}"),
+            BotSpec::Exploit { level, vpip } => write!(f, "exploit:{level}:{vpip}"),
             BotSpec::Ismcts {
                 level,
                 playouts: None,
@@ -122,7 +161,7 @@ impl std::fmt::Display for BotSpec {
 /// `Arc<dyn Any>` and downcast back to `Blueprint<G>` on the way out. A path loaded as one game
 /// and requested as another fails the downcast and is reloaded (and then rejected by the game
 /// id check).
-fn cached_blueprint<G: Game>(path: &str) -> Arc<Blueprint<G>> {
+fn cached_blueprint<G: Game>(game: &G, path: &str) -> Arc<Blueprint<G>> {
     use std::any::Any;
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
@@ -135,17 +174,16 @@ fn cached_blueprint<G: Game>(path: &str) -> Arc<Blueprint<G>> {
     {
         return bp;
     }
-    let bp = Arc::new(load_blueprint::<G>(path));
+    let bp = Arc::new(load_blueprint::<G>(game, path));
     cache.lock().unwrap().insert(path.to_string(), bp.clone());
     bp
 }
 
 /// Read a blueprint file (postcard, see `bots::mccfr::blueprint`). Panics with a clear message if it
 /// can't be loaded: a sim with a missing bot can't produce meaningful results.
-fn load_blueprint<G: Game>(path: &str) -> Blueprint<G> {
+fn load_blueprint<G: Game>(game: &G, path: &str) -> Blueprint<G> {
     let raw = std::fs::read(path).unwrap_or_else(|e| panic!("blueprint {path}: {e}"));
-    let game = G::new(G::Config::default());
-    Blueprint::from_bytes(&game, &raw).unwrap_or_else(|e| panic!("blueprint {path}: {e}"))
+    Blueprint::from_bytes(game, &raw).unwrap_or_else(|e| panic!("blueprint {path}: {e}"))
 }
 
 /// A simulation run.
@@ -169,6 +207,17 @@ pub struct RunSpec {
     /// Charge the dealer ante on every hand (default off: it models one-hand-per-game play).
     #[serde(default)]
     pub dealer_ante: bool,
+    /// Aggregate results per starting hand and per decision situation over every hand
+    /// (`study.rs`). Costs a little speed; off by default.
+    #[serde(default)]
+    pub study: bool,
+    /// Collect balance statistics (`balance.rs`: pots, showdowns, position, game length).
+    #[serde(default)]
+    pub balance: bool,
+    /// The game's `Config` overrides as a TOML table (variations, house-rule flags), e.g.
+    /// `{ variants = ["hi_lo"] }`. `None` = the game's defaults.
+    #[serde(default)]
+    pub config: Option<toml::Table>,
 }
 
 fn yes() -> bool {
@@ -181,7 +230,7 @@ mod tests {
 
     #[test]
     fn bot_spec_round_trips() {
-        for s in ["random", "ismcts:7", "ismcts:3:500"] {
+        for s in ["random", "ismcts:7", "ismcts:3:500", "exploit:5:20"] {
             let b: BotSpec = s.parse().unwrap();
             assert_eq!(b.to_string(), s);
         }

@@ -9,6 +9,10 @@
 //! seats, with identical cards. The unit of the statistics is the *deal* (the average over its
 //! rotations), because results within one deal are strongly correlated; treating them as independent
 //! hands would make the confidence interval look tighter than it is.
+//!
+//! **`UntilDone` games.** A deal is one whole game: hands repeat, carrying `Game::Carry`, until
+//! the game is over (or hits its hand cap, which splits any carried pot: D-G0-1). Hand `h > 0` of
+//! deal `d` mixes `h` into the seed; hand 0 uses exactly the streams above.
 
 use std::time::Instant;
 
@@ -16,13 +20,15 @@ use rand::Rng;
 use rayon::prelude::*;
 use serde::Serialize;
 
-use bots::{Policy, play_hand};
+use bots::{Policy, play_hand_with};
 use engine::rng::{Stream, derive_rng};
-use engine::{ActionClass, Chips, Game, HandSetup, Seat, StakeModel, ToAct};
+use engine::{ActionClass, Chips, Game, GameCarry, GameLength, HandSetup, Seat, StakeModel, ToAct};
 
-use crate::encoding::{HandRecord, encode};
+use crate::balance::BalanceStats;
+use crate::encoding::{HandRecord, encode, encode_carry};
 use crate::spec::RunSpec;
 use crate::stats::Welford;
+use crate::study::{HandStudy, Study, StudyRows};
 
 /// Where kept hand records go.
 pub trait RecordSink {
@@ -103,6 +109,10 @@ pub struct RunReport {
     pub bots: Vec<BotReport>,
     pub throughput: Throughput,
     pub records_kept: u64,
+    /// Per-starting-hand and per-decision aggregates, when `spec.study`.
+    pub study: Option<StudyRows>,
+    /// Balance statistics, when `spec.balance`.
+    pub balance: Option<BalanceStats>,
 }
 
 /// Everything one deal produced.
@@ -114,6 +124,8 @@ struct DealOutcome {
     decisions: u64,
     bytes: u64,
     kept: Vec<Vec<u8>>,
+    study: Option<Study>,
+    balance: Option<BalanceStats>,
 }
 
 /// Run `spec` on `game`. `on_progress(done, total)` is called after each batch.
@@ -142,6 +154,8 @@ pub fn run<G: Game>(
     let mut results = vec![Welford::default(); n];
     let mut actions = vec![ActionCounts::default(); n];
     let (mut hands, mut decisions, mut bytes, mut kept) = (0u64, 0u64, 0u64, 0u64);
+    let mut study = spec.study.then(Study::default);
+    let mut balance = spec.balance.then(BalanceStats::default);
 
     const BATCH: u64 = 1_024;
     let mut d0 = 0;
@@ -163,6 +177,12 @@ pub fn run<G: Game>(
             for r in &out.kept {
                 sink.write(r);
                 kept += 1;
+            }
+            if let (Some(total), Some(part)) = (study.as_mut(), out.study.as_ref()) {
+                total.merge(part);
+            }
+            if let (Some(total), Some(part)) = (balance.as_mut(), out.balance.as_ref()) {
+                total.merge(part);
             }
         }
         d0 = d1;
@@ -194,6 +214,8 @@ pub fn run<G: Game>(
             mb_per_day_full_history: hands_per_sec * bytes_per_hand * 86_400.0 / 1e6,
         },
         records_kept: kept,
+        study: study.map(|s| s.to_rows()),
+        balance,
     }
 }
 
@@ -213,6 +235,8 @@ fn play_deal<G: Game>(
         decisions: 0,
         bytes: 0,
         kept: Vec::new(),
+        study: spec.study.then(Study::default),
+        balance: spec.balance.then(BalanceStats::default),
     };
     let button = Seat((d % n as u64) as u8);
     let setup = HandSetup {
@@ -222,48 +246,124 @@ fn play_deal<G: Game>(
         ..HandSetup::simple(n as u8, stack)
     };
     let keep = derive_rng(spec.seed, d, Stream::Custom(7)).random::<f64>() < spec.history_sample;
+    let max_hands = match game.meta().length {
+        GameLength::UntilDone { max_hands } => max_hands,
+        _ => 1,
+    };
+    let all: u16 = (1u16 << n) - 1;
     for r in 0..rotations {
         // seating[s] = which bot sits in seat s for this rotation.
         let seating: Vec<usize> = (0..n).map(|s| (s + r) % n).collect();
-        let mut policies: Vec<Box<dyn Policy<G>>> =
-            seating.iter().map(|&b| spec.bots[b].build::<G>()).collect();
+        let mut policies: Vec<Box<dyn Policy<G>>> = seating
+            .iter()
+            .map(|&b| spec.bots[b].build::<G>(game))
+            .collect();
         let mut seats: Vec<&mut dyn Policy<G>> = policies
             .iter_mut()
             .map(|p| p.as_mut() as &mut dyn Policy<G>)
             .collect();
-        let mut deal_rng = derive_rng(spec.seed, d, Stream::Deal);
-        let hand_id = d * rotations as u64 + r as u64;
-        let mut rngs: Vec<_> = (0..n)
-            .map(|s| derive_rng(spec.seed, hand_id, Stream::Seat(s as u8)))
-            .collect();
-        let result = play_hand(game, &setup, &mut seats, &mut deal_rng, &mut rngs);
-
-        for (&bot, pay) in seating.iter().zip(&result.payoffs) {
-            out.per_bot[bot] += pay.0 as f64 / unit / rotations as f64;
-        }
-        // Classify each decision (replaying: `classify` needs the state at that moment).
-        let mut state = game.new_hand(&setup);
-        for &a in &result.actions {
-            if let ToAct::Seat(p) = game.to_act(&state) {
-                out.actions[seating[p.index()]].add(game.classify(&state, a));
+        let mut carry = GameCarry::new(game);
+        for h in 0..max_hands {
+            if h > 0 {
+                let out_mask = carry.seats_out(game) & all;
+                if carry.is_over() || n as u32 - out_mask.count_ones() < 2 {
+                    break;
+                }
             }
-            game.apply(&mut state, a);
+            let dealt_out = carry.seats_out(game) & all;
+            // Hand 0 is the deal's own setup; later hands move the button, skipping dealt-out seats.
+            let setup = if h == 0 {
+                setup.clone()
+            } else {
+                let b = (0..n)
+                    .map(|k| ((button.0 as usize + h as usize + k) % n) as u8)
+                    .find(|&s| dealt_out & (1 << s) == 0)
+                    .unwrap();
+                HandSetup {
+                    button: Seat(b),
+                    first_hand_of_game: false,
+                    dealt_out,
+                    ..setup.clone()
+                }
+            };
+            let seed = spec
+                .seed
+                .wrapping_add((h as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            let mut deal_rng = derive_rng(seed, d, Stream::Deal);
+            let hand_id = d * rotations as u64 + r as u64;
+            let mut rngs: Vec<_> = (0..n)
+                .map(|s| derive_rng(seed, hand_id, Stream::Seat(s as u8)))
+                .collect();
+            let carry_in = encode_carry(carry.carry());
+            let (result, end) = play_hand_with(
+                game,
+                &setup,
+                carry.carry(),
+                &mut seats,
+                &mut deal_rng,
+                &mut rngs,
+            );
+
+            for (&bot, pay) in seating.iter().zip(&result.payoffs) {
+                out.per_bot[bot] += pay.0 as f64 / unit / rotations as f64;
+            }
+            if let Some(b) = out.balance.as_mut() {
+                // Results by position (first seat left of the button … the button).
+                let by_pos: Vec<f64> = (1..=n)
+                    .map(|k| (setup.button.index() + k) % n)
+                    .filter(|&i| setup.dealt_in(Seat(i as u8)))
+                    .map(|i| result.payoffs[i].0 as f64 / unit)
+                    .collect();
+                let folded = engine::showdown::folded_seats(game, &end);
+                let live = (0..n)
+                    .filter(|&i| setup.dealt_in(Seat(i as u8)) && folded & (1 << i) == 0)
+                    .count();
+                b.add_hand(&by_pos, live >= 2);
+            }
+            // Classify each decision (replaying: `classify` needs the state at that moment).
+            let mut state = carry.new_hand(game, &setup);
+            let mut hand_study = out.study.is_some().then(|| HandStudy::new(n));
+            for &a in &result.actions {
+                if let ToAct::Seat(p) = game.to_act(&state) {
+                    out.actions[seating[p.index()]].add(game.classify(&state, a));
+                    if let Some(hs) = hand_study.as_mut() {
+                        hs.on_decision(game, &state, p, a);
+                    }
+                }
+                game.apply(&mut state, a);
+            }
+            if let (Some(hs), Some(total)) = (hand_study, out.study.as_mut()) {
+                let results: Vec<f64> = result.payoffs.iter().map(|p| p.0 as f64 / unit).collect();
+                hs.finish(game, &state, setup.button, &results, total);
+            }
+            let record = encode(&HandRecord::new(
+                game.meta().id,
+                game.meta().version,
+                d,
+                r as u8,
+                seating.iter().map(|&b| b as u8).collect(),
+                setup.clone(),
+                carry_in,
+                result.actions,
+            ));
+            out.bytes += record.len() as u64;
+            if keep {
+                out.kept.push(record);
+            }
+            out.hands += 1;
+            out.decisions += result.decisions as u64;
+            carry.finish_hand(game, &end, &result.payoffs);
         }
-        let record = encode(&HandRecord::new(
-            game.meta().id,
-            game.meta().version,
-            d,
-            r as u8,
-            seating.iter().map(|&b| b as u8).collect(),
-            setup.clone(),
-            result.actions,
-        ));
-        out.bytes += record.len() as u64;
-        if keep {
-            out.kept.push(record);
+        if let Some(b) = out.balance.as_mut() {
+            b.add_game(carry.hands() as u64);
         }
-        out.hands += 1;
-        out.decisions += result.decisions as u64;
+        // Cap reached (or too few seats left) with a pot still carried: split it (D-G0-1).
+        let eligible = all & !carry.seats_out(game);
+        if let Some(pay) = carry.close(game, n as u8, eligible, all) {
+            for (&bot, p) in seating.iter().zip(&pay) {
+                out.per_bot[bot] += p.0 as f64 / unit / rotations as f64;
+            }
+        }
     }
     out
 }
@@ -287,6 +387,9 @@ mod tests {
             history_sample: 0.0,
             stack: None,
             dealer_ante: false,
+            study: false,
+            balance: false,
+            config: None,
         }
     }
 
@@ -356,5 +459,44 @@ mod tests {
             assert_eq!(game.to_act(&state), ToAct::Terminal);
         }
         assert!(r.throughput.bytes_per_hand > 10.0);
+    }
+
+    #[test]
+    fn until_done_games_carry_between_hands_and_balance() {
+        use crate::encoding::decode_carry;
+        use engine::replay::replay_with;
+        use engine::testing::guts_lite::{self, GutsLite};
+        type G = GutsLite<true>;
+        let game = G::new(());
+        let mut s = spec("toy_guts_lite", &["random", "random", "random"], 300);
+        s.history_sample = 1.0;
+        let mut sink = VecSink::default();
+        let r = run(&game, &s, &mut sink, |_, _| {});
+        let total: f64 = r.bots.iter().map(|b| b.per_hand).sum();
+        assert!(total.abs() < 1e-9, "chips created or lost: {total}");
+        assert!(
+            r.hands > 300 * 3,
+            "games should span several hands: {}",
+            r.hands
+        );
+
+        // Every hand replays from its own carry_in, and each hand's carry_out is the next
+        // hand's carry_in within the same game.
+        let records: Vec<HandRecord<guts_lite::Act>> = decode_all(&sink.0).unwrap();
+        assert_eq!(records.len() as u64, r.hands);
+        let mut prev: Option<(u64, u8, guts_lite::Carry)> = None;
+        for rec in records {
+            let carry: guts_lite::Carry = decode_carry(&rec.carry_in).unwrap();
+            if let Some((d, rot, out)) = &prev
+                && (*d, *rot) == (rec.deal, rec.rotation)
+            {
+                assert_eq!(&carry, out, "carry chain broken in deal {d}");
+            } else {
+                assert_eq!(carry, guts_lite::Carry::default(), "a game starts fresh");
+            }
+            let state = replay_with(&game, &rec.setup, &carry, &rec.actions).unwrap();
+            assert_eq!(game.to_act(&state), ToAct::Terminal);
+            prev = Some((rec.deal, rec.rotation, game.carry_out(&state)));
+        }
     }
 }

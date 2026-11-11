@@ -4,9 +4,9 @@
 //! and without the catastrophic cancellation of the naive `Σx² − (Σx)²/n`. Chan's formula merges two
 //! partial results, which lets per-batch statistics be combined exactly.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Copy, Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Welford {
     pub n: u64,
     pub mean: f64,

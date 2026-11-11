@@ -360,7 +360,7 @@ House conventions that are engine-level, not per-game:
 | G0 | API v2 foundation (`game-catalog.md` §2) | v1 tests pass on v2; toy UntilDone game passes conformance |
 | G1–G10 | Game families (`game-catalog.md` §4), one PR each | Per-game definition of done (`game-catalog.md` §4) |
 | S1–S6 | Simulation program (`sim-program.md` §6) | Per milestone |
-| W1–W6 | Web multiplayer (`web.md` §12) | Per milestone |
+| W1–W7 | Web multiplayer (`web.md` §12), W7 = Discord Activity (§13) | Per milestone |
 
 Sequencing: M9 → G0 → then three parallel tracks. S1–S3 start on Hold'em + FTQ immediately after M9; W1 needs
 G0's `view()`; each G family adds its games to the balance campaign and the web gallery.

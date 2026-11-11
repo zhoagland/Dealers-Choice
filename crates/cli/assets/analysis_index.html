@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="60">
+<title>Hand Studies</title>
+<style>
+:root { color-scheme: light; --surface-0: #f5f4f1; --surface-1: #fcfcfb; --surface-2: #f0efec; --border: #dddcd7;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7974; --accent: #2a78d6; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; --surface-0: #121211; --surface-1: #1a1a19;
+  --surface-2: #242422; --border: #383835; --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86; --accent: #3987e5; } }
+:root[data-theme="dark"] { color-scheme: dark; --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #242422; --border: #383835;
+  --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86; --accent: #3987e5; }
+body { margin: 0; background: var(--surface-0); color: var(--text-primary); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 900px; margin: 0 auto; padding: 24px 16px; }
+h1 { font-size: 24px; margin: 0 0 4px; }
+.sub { color: var(--text-secondary); margin: 0 0 16px; }
+a { color: var(--accent); }
+.game { display: grid; grid-template-columns: 1fr auto; gap: 4px 16px; background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 10px; padding: 14px 16px; margin: 10px 0; }
+.meta { color: var(--text-secondary); font-size: 13px; font-variant-numeric: tabular-nums; }
+.bar { grid-column: 1 / -1; height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">Hand studies</h1>
+  <p class="sub" id="sub"></p>
+  <div id="games"></div>
+</main>
+<script id="data" type="application/json">"__DC_DATA__"</script>
+<script>
+"use strict";
+const S = JSON.parse(document.getElementById("data").textContent);
+const fmtN = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n);
+if (!S) {
+  document.getElementById("sub").textContent = "This campaign hasn't started yet.";
+} else {
+  document.getElementById("title").textContent = `Hand studies · ${S.name}`;
+  document.getElementById("sub").textContent = `State: ${S.state} · updated ${new Date(S.updated_unix * 1000).toLocaleString()} · this page refreshes every minute`;
+  document.getElementById("games").innerHTML = S.games.map((g) => {
+    const pct = Math.min(100, 100 * g.hands / Math.max(1, g.target_hands));
+    const left = g.hands_per_sec > 0 ? Math.max(0, (g.target_hands - g.hands) / g.hands_per_sec) : null;
+    const eta = left === null ? "" : left < 3600 ? ` · ~${Math.ceil(left / 60)} min left` : ` · ~${(left / 3600).toFixed(1)} h left`;
+    return `<div class="game"><div><b><a href="${g.id}/dashboard.html">${g.display_name}</a></b></div>
+      <div class="meta">${fmtN(g.hands)} / ${fmtN(g.target_hands)} hands</div>
+      <div class="meta">${Math.round(g.hands_per_sec).toLocaleString()} hands/s · ${g.chunks} chunks${pct >= 100 ? " · done" : eta}</div><div></div>
+      <div class="bar"><i style="width:${pct}%"></i></div></div>`;
+  }).join("");
+}
+</script>
+</body>
+</html>

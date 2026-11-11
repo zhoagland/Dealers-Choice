@@ -183,8 +183,10 @@ Required tests, generic and provided by `engine::testing` (§6):
   observation must change at least once. If it never does, *r*'s private cards are effectively fixed
   by *q*'s observation, i.e. leaked (or `determinize` ignores the sampler). It's a statistical
   check that catches gross leaks; subtle ones (e.g. leaking one bit of a card) still need
-  game-specific tests. Also: legal actions and `to_act` must be identical across determinizations,
-  because legality that depends on hidden cards is itself a leak.
+  game-specific tests. Also: `to_act` must be identical across determinizations, and legal actions
+  must be a function of the *actor's* observation (identical whenever the actor's observation is):
+  a menu may depend on the actor's own cards (follow suit in Booray) but never on cards the actor
+  can't see. ISMCTS keys its nodes by the actor's observation, which is exactly this requirement.
 - **Perfect recall (C5):** along one hand, a seat's observations at its own decision points
   are all distinct. Necessary, not sufficient; the stronger property ("the history can be recovered
   from the observation") is enforced by the convention that observations carry the full public
@@ -266,8 +268,8 @@ server boundary. Everything downstream is generic and monomorphized.
   `UntilDone` games (Guts Leg legs, 3-2-1 Drop carry-over pot) need state passed between hands:
   a `type Carry` produced at terminal and fed into the next `new_hand`, plus `fn game_over(&Carry) -> bool`.
   Deferred until the first such driver (YAGNI). That would be `API_VERSION` 2.
-  **Planned (Phase 2, milestone G0):** API v2 adds `type Carry`, `carry_out`, `game_over`,
-  `GameLength::UntilDone`, and a required `view()` for the web UI. See `docs/tech/game-catalog.md` §2.
+  **Done in G0 (API v2):** `type Carry`, `GameCarry`, `GameLength::UntilDone`, and a required `view()`
+  that the web UI draws. See `docs/tech/game-catalog.md` §2 and the API v2 sections of this document.
 - **Rendering.** *Changed during implementation:* the text hooks `describe_observation`,
   `describe_action`, `parse_action` are default methods on `Game` (defaults: `Debug`, none).
   A separate `Render<G>` trait in the CLI would need its own per-game registry, because

@@ -28,6 +28,10 @@ covered, that's a bug in this document: fix it here.
              storage ───────────────── SQLite, data dir, profiles
                 ↑
                cli (dc) ────────────── everything user-facing
+                ↑
+   protocol ← server (dc-server) ──── web app: axum, Discord sign-in, one thread per table
+                ↑
+              web/ ─────────────────── React client (TypeScript), one renderer for every game
 ```
 
 `bots` never depends on `games` (bots are game-agnostic, FR-GD-6); it only uses them in tests.
@@ -46,6 +50,11 @@ covered, that's a bug in this document: fix it here.
 | Your HUD stats | `crates/sim/src/analytics.rs` |
 | DB schema | `crates/storage/migrations/*.sql` (+ `db.rs`) |
 | A command or flag | `crates/cli/src/<command>.rs` |
+| Web messages (client ↔ server) | `crates/protocol/src/lib.rs`, mirrored in `web/src/protocol.ts` |
+| Web table flow, timers, ledger | `crates/server/src/table.rs` |
+| Web sign-in, REST, WebSocket | `crates/server/src/{auth,api,ws}.rs` |
+| How a game looks in the browser | the game's `view()`; the client draws it in `web/src/components/TableRenderer.tsx` |
+| Deploying | `deploy/README.md` |
 
 ## 2. Build, run, test
 
@@ -75,6 +84,14 @@ dc bench-sim                               throughput / data-rate table
 Locations: `--data-root` / `$DC_DATA_ROOT` / `./data` (DB, sim runs, blueprints, gitignored);
 `--config-root` / `$DC_CONFIG_ROOT` / `./config` (profiles, spots; committed).
 
+Web app locally (no Discord needed):
+
+```powershell
+$env:DEV_MODE='1'; cargo run -p server     # http://localhost:8080, sign in by name
+cd web; npm install; npm run dev           # hot-reloading client, proxies to the server
+# http://localhost:5173/#/dev/views        every game's view, drawn by the client (dev only)
+```
+
 **Machine quirks (this dev machine):**
 - Corporate TLS proxy: cargo downloads fail on certificate revocation checks. Set
   `$env:CARGO_HTTP_CHECK_REVOKE='false'` for the command (or `[http] check-revoke = false` in
@@ -82,6 +99,28 @@ Locations: `--data-root` / `$DC_DATA_ROOT` / `./data` (DB, sim runs, blueprints,
 - Run cargo from PowerShell. Under Git Bash, builds died silently with exit 127 partway through.
 - Builds occasionally get killed (exit 0xE0000027) while downloading or compiling; just rerun.
   Progress is kept.
+
+## 2b. Simulation campaigns (Phase 2, track S)
+
+Campaign files live in `config/campaigns/` (`balance-v1`, `balance-ismcts`, `ladder-v1`, `study-v1`,
+`blueprint-v1`; format in `docs/tech/sim-program.md` §1).
+
+```
+dc campaign plan config/campaigns/balance-v1.toml     # runs, hands, time estimate
+dc campaign run  config/campaigns/balance-v1.toml --threads 12 --nice
+dc campaign status
+dc campaign pause balance-v1      # stops after the current chunk
+dc campaign resume balance-v1     # continues where it stopped
+dc campaign report balance-v1     # <data_root>/reports/balance-v1/index.html
+```
+
+- `run` copies `dc.exe` to `<data_root>/bin/dc-<git sha>.exe` and runs that copy, so `cargo build` keeps
+  working and every summary records the sha (FR-SP-8). A `-dirty` sha means uncommitted changes.
+- Chunks are files; killing the process loses at most the chunk in progress.
+- **Overnight on Windows:** open a terminal and run `start /min dc campaign run <file> --nice`, or create a
+  Scheduled Task (Task Scheduler → Create Task → Action: `dc.exe`, arguments
+  `campaign resume <name> --nice`, start in the repo folder; trigger "at 1:00 AM"). `resume` is idempotent.
+- `dc lab` starts and watches study campaigns from a browser page.
 
 ## 3. Debugging and replay
 
@@ -134,6 +173,9 @@ Every hand is reproducible from **(game id + version, setup, action log)**, chan
 | `fmt` | every push/PR | formatting | run `cargo fmt --all`, commit |
 | `clippy` | every push/PR | lints as errors | fix the lint; avoid `#[allow]` unless the lint is wrong, and say why in a comment |
 | `test` (Linux + Windows) | every push/PR | all unit, conformance, and statistical tests | see below |
+| `web` | every push/PR | generated protocol samples and view gallery are current; `protocol.ts` fits them; the client builds | run `cargo test -p protocol -p server`, commit `web/src/generated`; fix `web/src/protocol.ts` to match the Rust types |
+| `docker` | tags `v*` | the deploy image builds | read the failing stage (node or cargo) |
+| `deploy` (`deploy.yml`) | push to `main`, or by hand | runs all of CI, then on the self-hosted runner (label `dealers-choice`): backup, build, restart, image check, smoke test | the job log, then the "Logs on failure" step; setup in `deploy/README.md` Part 2 |
 | `nightly` | 07:00 UTC daily, or manual | exhaustive 7-card eval, benchmarks, `bench-sim` table (artifact) | a real regression in eval or a big slowdown |
 
 Diagnosing `test` failures:
@@ -165,12 +207,13 @@ playouts/s/thread (Hold'em), ~55 k (FTQ). Full table: `docs/tech/sim.md` §5.
 ## 8. Backlog (prioritized)
 
 1. **Better rollout policy** (equity-aware instead of check-down). Fixes the most visible coach bias.
-2. **FR-PA-5 exploitative bots / opponent model**: weight determinization by the player's
-   observed tendencies (from `dc stats`), with capped deviation.
-3. **Web UI**: planned as Phase 2 track W, `docs/tech/web.md`.
-4. **FR-BT-8 external policy adapter (Jev)**: protocol in `docs/tech/bots.md` §6.
-5. **`UntilDone` games** (Guts Leg, 3-2-1 Drop): planned as API v2 (milestone G0), `docs/tech/game-catalog.md` §2.
-6. **More Bible games**: planned as Phase 2 track G (all 48), `docs/tech/game-catalog.md`.
+2. ~~FR-PA-5 exploitative bots~~: built (VPIP read, `bots/src/exploit.rs`, `dc play --exploit`). Next: ranges
+   by position and action instead of one VPIP.
+3. **Web UI**: built (`crates/server`, `web/`). Still to do with the group: a session on real phones and the deploy on the owner's server (W5 exit), launching from a voice channel (W7 exit).
+4. ~~FR-BT-8 external policy adapter~~: built (`ext:<spec.toml>`, `sim/src/external.rs`), including a Jev
+   transport for TypeSafe's System One API. Next: a live run once there's an API key.
+5. ~~`UntilDone` games~~: done in G0/G8.
+6. ~~More Bible games~~: all 50 done (track G).
 7. **HUNL MCCFR** with card/action abstraction (`Abstraction` trait; bots.md §3).
 8. **GPU / neural**: equity on GPU (`wgpu`/`cudarc`), value networks (`candle`/`burn`) for
    depth-limited search. A 3080 is enough for small networks.

@@ -353,6 +353,14 @@ impl Betting {
         self.cursor = seat.next(self.num_seats);
     }
 
+    /// Fold `seat` outside its turn (a fouled hand, an "out" declaration). Its chips stay in the
+    /// pot; betting continues with the others.
+    pub fn fold_out(&mut self, seat: Seat) {
+        self.folded |= bit(seat);
+        self.needs &= !bit(seat);
+        self.normalize_needs();
+    }
+
     /// Concrete actions for a bot menu (FR-BT-7): fold (if facing a bet), check/call, and each
     /// distinct legal raise amount from `sizes`. Sizes are snapped to the step and clamped to
     /// the legal range; duplicates collapse.

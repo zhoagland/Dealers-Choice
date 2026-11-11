@@ -11,7 +11,8 @@ use std::fmt;
 
 use engine::Game;
 
-use crate::{ftq::FollowTheQueen, holdem::Holdem, kuhn::Kuhn, leduc::Leduc};
+use crate::script::{self, Scripted, games::SCRIPTED_IDS};
+use crate::{blackjack::Blackjack, ftq::FollowTheQueen, holdem::Holdem, kuhn::Kuhn, leduc::Leduc};
 
 /// Something to do with a game once its concrete type is known.
 pub trait GameVisitor<R> {
@@ -19,7 +20,61 @@ pub trait GameVisitor<R> {
 }
 
 /// All registered game ids, for help text and menus.
-pub const GAME_IDS: &[&str] = &["kuhn", "leduc", "holdem_nl", "ftq"];
+pub const GAME_IDS: &[&str] = &[
+    "kuhn",
+    "leduc",
+    "holdem_nl",
+    "ftq",
+    // Scripted games (`script::games::SCRIPTED_IDS`, same order).
+    "omaha_pl",
+    "omaha5",
+    "courchevel",
+    "red_river",
+    "plo_double_board",
+    "holdem_6plus",
+    "holdem_showtime",
+    "reverse_poker",
+    "holdem_split",
+    "stud7",
+    "razz",
+    "chicago_high",
+    "chicago_low",
+    "indian_poker",
+    "holdem_indian",
+    "draw5",
+    "triple_draw",
+    "draw27_single",
+    "draw27_triple",
+    "badugi",
+    "three_blind_mice",
+    "crazy_pineapple",
+    "mamas_favorite",
+    "holdem_swap",
+    "fusion",
+    "pass_the_trash",
+    "man_or_mouse",
+    "game_43",
+    "elevator",
+    "wheel_of_death",
+    "spit",
+    "industrial_elevator",
+    "iron_cross",
+    "baseball",
+    "low_in_the_hole",
+    "push",
+    "bullet",
+    "bid",
+    "guts_leg",
+    "drop_321",
+    "three_five_seven",
+    "scare_a_moosh",
+    "holdem_tempest",
+    "seven_27",
+    "five_21",
+    "numbers",
+    "booray",
+    "blackjack",
+];
 
 /// Build game `id` from `config` (a TOML table of that game's `Config`; `None` = defaults)
 /// and hand it to `visitor`.
@@ -33,6 +88,16 @@ pub fn with_game<R>(
         "leduc" => Ok(visitor.visit(Leduc::new(parse_config(id, config)?))),
         "holdem_nl" => Ok(visitor.visit(Holdem::new(parse_config(id, config)?))),
         "ftq" => Ok(visitor.visit(FollowTheQueen::new(parse_config(id, config)?))),
+        "blackjack" => Ok(visitor.visit(Blackjack::new(parse_config(id, config)?))),
+        // Training only (blueprints): not listed in GAME_IDS, so it's never offered to play.
+        "holdem_hu_abstract" => Ok(visitor.visit(crate::holdem_abstract::AbstractHoldem::new(
+            parse_config(id, config)?,
+        ))),
+        id if SCRIPTED_IDS.contains(&id) => {
+            let mut c: script::Config = parse_config(id, config)?;
+            c.game = id.to_string();
+            Ok(visitor.visit(Scripted::new(c)))
+        }
         _ => Err(RegistryError::UnknownGame(id.to_string())),
     }
 }
@@ -97,6 +162,13 @@ mod tests {
     fn every_registered_id_resolves_to_itself() {
         for &id in GAME_IDS {
             assert_eq!(with_game(id, None, Id), Ok(id));
+        }
+    }
+
+    #[test]
+    fn every_scripted_game_is_registered() {
+        for id in SCRIPTED_IDS {
+            assert!(GAME_IDS.contains(id), "{id} missing from GAME_IDS");
         }
     }
 

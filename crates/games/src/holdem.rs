@@ -19,6 +19,13 @@ use engine::eval::high::eval_high;
 use engine::game::sample_hidden_hands;
 use engine::pot::{award_high, build_pots, order_from_button};
 use engine::replay::replay_interleaved;
+use engine::{AnalysisLabels, DecisionContext};
+
+use crate::analysis_util::{
+    POSTFLOP_STRENGTHS, PREFLOP_TIERS, board_texture, board_texture_names, holdem_class,
+    holdem_class_names, postflop_strength, preflop_tier, set,
+};
+use engine::view::{BoardView, CardSlot, PotView, SeatStatus, SeatView, TableView};
 use engine::{
     ActionClass, Card, CardSet, Chips, DetRng, Game, GameLength, GameMeta, HandSetup, HandValue,
     HiddenSampler, IllegalAction, Seat, StakeModel, ToAct,
@@ -300,6 +307,7 @@ impl Game for Holdem {
     type Action = Action;
     type Observation = Observation;
     type Config = Config;
+    type Carry = ();
 
     fn new(config: Config) -> Holdem {
         let stake = config.table_stake;
@@ -321,7 +329,7 @@ impl Game for Holdem {
         &self.meta
     }
 
-    fn new_hand(&self, setup: &HandSetup) -> State {
+    fn new_hand_with(&self, setup: &HandSetup, _carry: &()) -> State {
         let n = setup.num_seats;
         let mut betting = Betting::new(Structure::NoLimit, &setup.stacks, self.config.big_blind);
         if setup.first_hand_of_game && self.config.dealer_ante > Chips::ZERO {
@@ -570,6 +578,114 @@ impl Game for Holdem {
     }
     fn eval_unit(&self) -> Chips {
         self.config.big_blind
+    }
+
+    fn start_class(&self, s: &State, seat: Seat) -> Option<u16> {
+        let h = &s.hole[seat.index()];
+        (h.len() == 2).then(|| holdem_class(h[0], h[1]))
+    }
+
+    fn decision_context(&self, s: &State, seat: Seat) -> Option<DecisionContext> {
+        let h = &s.hole[seat.index()];
+        if h.len() < 2 {
+            return None;
+        }
+        let street = match s.street {
+            Street::Preflop => 0,
+            Street::Flop => 1,
+            Street::Turn => 2,
+            Street::River => 3,
+            Street::Done => return None,
+        };
+        let strength = if s.board.is_empty() {
+            preflop_tier(h[0], h[1])
+        } else {
+            let cat = eval_high(set(h).union(set(&s.board))).category();
+            postflop_strength(h, &s.board, cat)
+        };
+        Some(DecisionContext {
+            street,
+            board: board_texture(&s.board),
+            strength,
+            pot: s.betting.pot(),
+            street_committed: s.betting.street_committed(seat),
+            stack: s.betting.stacks()[seat.index()],
+        })
+    }
+
+    fn analysis_labels(&self) -> AnalysisLabels {
+        let (start_classes, start_grid) = holdem_class_names();
+        AnalysisLabels {
+            start_classes,
+            start_grid,
+            streets: ["preflop", "flop", "turn", "river"]
+                .map(String::from)
+                .to_vec(),
+            boards: board_texture_names(),
+            strengths: PREFLOP_TIERS
+                .iter()
+                .chain(&POSTFLOP_STRENGTHS)
+                .map(|s| s.to_string())
+                .collect(),
+        }
+    }
+
+    fn view(&self, obs: &Observation) -> TableView {
+        // Stacks, bets and the pot are public, so any determinization has the right ones.
+        // Its hidden cards are sampled, so only the *count* of hidden cards is read from it.
+        let s = self.determinize(
+            obs,
+            &mut engine::UniformSampler,
+            &mut engine::rng::rng_from_seed(0),
+        );
+        let b = &s.betting;
+        let seats = (0..obs.setup.num_seats)
+            .map(Seat)
+            .map(|seat| {
+                let i = seat.index();
+                let mut v = SeatView::new(seat, b.stacks()[i], b.street_committed(seat));
+                v.status = if b.is_folded(seat) {
+                    SeatStatus::Folded
+                } else if b.is_all_in(seat) {
+                    SeatStatus::AllIn
+                } else {
+                    SeatStatus::Active
+                };
+                v.cards = if seat == obs.seat {
+                    obs.hole.iter().map(|&c| CardSlot::Down(Some(c))).collect()
+                } else if let Some(shown) = &obs.shown[i] {
+                    shown.iter().map(|&c| CardSlot::Up(c)).collect()
+                } else {
+                    vec![CardSlot::Down(None); s.hole[i].len()]
+                };
+                if seat == obs.setup.chooser {
+                    v.badges.push("chooser".into());
+                }
+                v
+            })
+            .collect();
+        let board = obs.board();
+        let slots = (0..5)
+            .map(|k| board.get(k).map_or(CardSlot::Empty, |&c| CardSlot::Up(c)))
+            .collect();
+        TableView {
+            game: self.meta.display_name.into(),
+            phase: format!("{:?}", s.street),
+            viewer: obs.seat,
+            button: obs.setup.button,
+            to_act: match self.to_act(&s) {
+                ToAct::Seat(p) => Some(p),
+                _ => None,
+            },
+            seats,
+            boards: vec![BoardView::row("Board", slots)],
+            pots: vec![PotView {
+                name: "Pot".into(),
+                amount: b.pot(),
+            }],
+            wilds: Vec::new(),
+            notes: Vec::new(),
+        }
     }
 
     fn describe_observation(&self, obs: &Observation) -> String {
@@ -968,5 +1084,56 @@ mod tests {
             g.validate(&s, Action::RaiseTo(Chips(150))).is_err(),
             "below min raise"
         );
+    }
+
+    #[test]
+    fn optional_show_offered_to_losers_who_reached_showdown_with_hidden_cards() {
+        use engine::rng::{Stream, derive_rng};
+        use engine::showdown::{may_show, own_hidden_cards};
+        use rand::seq::IndexedRandom;
+        let g = Holdem::new(Config::default());
+        let mut offered = 0;
+        for hand in 0..400u64 {
+            let setup = HandSetup::simple(4, Chips(2_000));
+            let mut s = g.new_hand(&setup);
+            let mut rng = derive_rng(11, hand, Stream::Deal);
+            let mut legal = Vec::new();
+            loop {
+                let a = match g.to_act(&s) {
+                    ToAct::Terminal => break,
+                    ToAct::Chance => g.sample_chance(&s, &mut rng),
+                    ToAct::Seat(_) => {
+                        g.legal_actions(&s, &mut legal);
+                        // Mostly passive play, so hands often reach showdown.
+                        let passive: Vec<_> = legal
+                            .iter()
+                            .copied()
+                            .filter(|&a| {
+                                matches!(g.classify(&s, a), ActionClass::CheckOrCall { .. })
+                            })
+                            .collect();
+                        *if passive.is_empty() || rng.random_bool(0.1) {
+                            &legal
+                        } else {
+                            &passive
+                        }
+                        .choose(&mut rng)
+                        .unwrap()
+                    }
+                };
+                g.apply(&mut s, a);
+            }
+            let pay = g.payoffs(&s);
+            for p in may_show(&g, &s) {
+                offered += 1;
+                assert!(pay[p.index()] < Chips::ZERO, "only losers may show");
+                assert!(!s.betting.is_folded(p), "folded seats can't show");
+                assert_eq!(
+                    own_hidden_cards(&g, &s, p).as_slice(),
+                    &s.hole[p.index()][..]
+                );
+            }
+        }
+        assert!(offered > 0, "some showdown loser should have mucked");
     }
 }

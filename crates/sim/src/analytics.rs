@@ -130,6 +130,7 @@ pub fn hand_class(cards: &[Card]) -> Option<String> {
 pub fn add_hand<G: Game>(
     game: &G,
     setup: &HandSetup,
+    carry: &G::Carry,
     actions: &[G::Action],
     seat: Seat,
     stats: &mut PlayerStats,
@@ -138,7 +139,7 @@ pub fn add_hand<G: Game>(
     let position = (seat.0 + n - setup.button.0) % n;
     let mut spots = BTreeMap::new();
 
-    let mut state = game.new_hand(setup);
+    let mut state = game.new_hand_with(setup, carry);
     let mut round: u8 = 0;
     let mut acted_since_chance = false;
     let mut raises_this_round = 0u32;
@@ -362,7 +363,7 @@ mod tests {
             let mut deal = derive_rng(5, h, Stream::Deal);
             let mut rngs: Vec<_> = (0..3).map(|s| derive_rng(5, h, Stream::Seat(s))).collect();
             let r = play_hand(&game, &setup, &mut seats, &mut deal, &mut rngs);
-            add_hand(&game, &setup, &r.actions, Seat(0), &mut stats);
+            add_hand(&game, &setup, &(), &r.actions, Seat(0), &mut stats);
         }
         stats
     }

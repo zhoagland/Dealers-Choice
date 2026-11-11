@@ -86,6 +86,12 @@ impl<G: Game> IsmctsBot<G> {
         )
     }
 
+    /// How this bot imagines opponents' hidden cards (default uniform). FR-PA-5 exploit bots
+    /// pass a range sampler built from a player's tendencies (`exploit.rs`).
+    pub fn set_sampler(&mut self, sampler: Box<dyn engine::HiddenSampler + Send>) {
+        self.search.sampler = sampler;
+    }
+
     /// Playouts in the most recent decision.
     pub fn last_playouts(&self) -> u32 {
         self.search.last_playouts

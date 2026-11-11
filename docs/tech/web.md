@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Draft v0.2 for owner review (2026-11-10) |
+| Status | Built (2026-11-11): W1–W4, W6 done; W5 and W7 built, waiting on the group's phone session and the owner's deploy. See §14 for where the build differs from this plan |
 | Implements | PRD FR-WB-1…12, milestones W1–W6 |
 | Builds on | FR-UI-2 (serde I/O), `cli.md` "Path to the web UI", API v2 `view()` (`game-catalog.md` §2) |
 
@@ -224,5 +224,69 @@ check; per-connection and per-account rate limits; message size cap (16 KB); inp
 | W4 | Chat + hand history (viewer-filtered replay) | Leak test: replaying any stored hand as each viewer never shows a card that viewer couldn't see live |
 | W5 | Mobile polish, Docker image, deploy docs, backups | Session played on phones; deployed on the owner's server behind TLS |
 | W6 | Every game family's `view()` in the gallery; optional `/reports` for sim reports | Each catalog family PR adds its games to the gallery |
+| W7 | Discord Activity entry point (§13): Embedded App SDK auth, one table per Activity instance, iframe layout | The group launches a table from a Discord voice channel on desktop and phone and plays an FTQ hand |
 
 W1 starts after G0 (it needs `view()`). After that, web work runs in parallel with the game families and sims.
+
+## 13. Discord Activity (added 2026-11-11 as W7; owner can drop it)
+
+Owner question: "is it possible to play the app in Discord too as a live activity?" Yes. A Discord **Activity**
+is a web app that Discord shows in an iframe inside a voice channel (desktop, browser and mobile clients). People
+in the call press the Activities button, pick the app, and play together without leaving Discord. Our planned app
+(React page + axum server + Discord login) is already that kind of app, so this is a second entry point, not a
+second app.
+
+What changes (verify against Discord's current Embedded App SDK docs when building):
+- **Same Discord application** as sign-in (`deploy/README.md` Part 1). In the Developer Portal enable
+  Activities and add a URL mapping from `/` to our domain. Discord serves the page from
+  `<app-id>.discordsays.com` and proxies every request; the page can't call other origins directly.
+- **Front end:** add `@discord/embedded-app-sdk`. When the page detects it's inside Discord it uses the SDK's
+  `authorize` → our server exchanges the code (`POST /api/discord/token`, client secret stays server-side) →
+  `authenticate`. Outside Discord, the normal OAuth redirect flow (§5) is unchanged.
+- **Auth transport:** cookies inside Discord's iframe are third-party and unreliable, so inside an Activity the
+  session token travels in an `Authorization` header and on the WebSocket connect message instead of the cookie.
+- **Tables:** one table per Activity instance (`sdk.instanceId`), so everyone who joins the Activity in that voice
+  channel lands at the same table automatically; the lobby is skipped. The allowlist still applies.
+- **Layout:** the iframe can be small (a tile in the call, or a phone). The mobile-first table (§8) already
+  targets 375 px; add a check at Discord's minimum sizes.
+- **Nice extras (later):** show who's in the voice channel as invitees; Rich Presence ("Playing Follow the Queen").
+
+Cost: roughly one milestone (**W7**) after W3, since auth, tables and the UI are reused. Risks: Discord's proxy and
+CSP rules (all asset and WebSocket URLs must be relative so they go through the mapping) and SDK changes.
+
+## 14. As built (2026-11-11)
+
+Code: `crates/protocol`, `crates/server` (`dc-server`), `web/`, `deploy/`. The end-to-end test
+(`crates/server/src/tests.rs`) signs two players in, opens a table, plays a Hold'em hand over real WebSockets, and
+replays it as each player, checking that neither sees the other's hole cards.
+
+| Milestone | State | Notes |
+|---|---|---|
+| W1 | done | Every game, not just Hold'em and FTQ: prompts are generic (D-WEB-1), see below |
+| W2 | done | Discord OAuth with PKCE + `state`, guild allowlist, admins, hashed 30-day sliding sessions; `DEV_MODE` name login for local testing |
+| W3 | done | Lobby, invite links (`/#/t/<id>`), host start/close, chooser game picker, 30 s + 60 s bank, 3 timeouts → sit out, reconnect = fresh snapshot |
+| W4 | done | Chat (500 chars, 5 per 10 s, 30 days, admin delete); hand list per table and per player; step replay from the viewer's seat; text export |
+| W5 | built | Mobile-first CSS, Docker image + compose with Caddy, `deploy/README.md`, nightly backups (7 kept). Exit needs the group: a session on phones, the deploy |
+| W6 | done | `#/dev/views` gallery: a mid-hand and a final view of all 50 games, exported by `cargo test -p server` |
+| W7 | built | Activity sign-in via the Embedded App SDK (`web/src/discord.ts`), `POST /api/discord/token`, one table per instance, bearer token instead of cookies. Exit needs a real voice channel |
+
+Differences from the plan above:
+- **Prompts** have two choice kinds, `Option` and `Amount`. Card choices (discards, passes, keeps) are buttons
+  labelled by the game's `describe_action` ("discard Kh 7c"), so there's no `CardPick` and no per-game client code.
+  Other players' card choices and declarations show in the log only as "chooses cards" / "declares".
+- **Simultaneous decisions** are asked in seat order, as the engine models them; views hide them until all are in.
+- **Messages**: `Snapshot` carries the table (`TableInfo`, with `hand_seats` mapping hand seats to table seats) and
+  the prompt; there's no event stream or `resume_from`. A reconnect gets a full snapshot, which is always safe.
+- **TypeScript types** are hand-written in `web/src/protocol.ts` and checked against JSON the server really produces
+  (`web/src/generated/samples.ts`, written by `cargo test -p protocol`) instead of `ts-rs`. CI fails if either
+  drifts.
+- **Tables** run on a thread each (`std::sync::mpsc` in, tokio channel out) rather than a tokio task, because the
+  game loop is synchronous engine code.
+- **Restarts** don't wait for hands to finish: each table stores what it owes after every hand (table-stake stacks
+  and its share of a carried pot); on start the server pays that back and reopens the table (D-WEB-6).
+- **Client**: plain React state, no zustand or Radix; hash routes so every URL stays relative (needed behind
+  Discord's Activity proxy). Avatars show initials (Discord's CDN isn't reachable from inside an Activity).
+- **Settle-up** is a tab at each table: net results over the last 24 hours.
+- `@discord/embedded-app-sdk` 2.x pulls a `zod` version that `npm audit` flags (high); the SDK only parses
+  messages from Discord's own client, so we accept it until the SDK updates.
+

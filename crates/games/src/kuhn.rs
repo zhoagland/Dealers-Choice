@@ -114,6 +114,7 @@ impl Game for Kuhn {
     type Action = Action;
     type Observation = Observation;
     type Config = Config;
+    type Carry = ();
 
     fn new(_config: Config) -> Kuhn {
         Kuhn {
@@ -133,7 +134,7 @@ impl Game for Kuhn {
         &self.meta
     }
 
-    fn new_hand(&self, setup: &HandSetup) -> State {
+    fn new_hand_with(&self, setup: &HandSetup, _carry: &()) -> State {
         assert_eq!(setup.num_seats, 2, "Kuhn is heads-up only");
         State {
             setup: setup.clone(),
@@ -287,6 +288,34 @@ impl Game for Kuhn {
 
     fn eval_unit(&self) -> Chips {
         Chips(1)
+    }
+
+    fn view(&self, obs: &Observation) -> engine::TableView {
+        use engine::view::{CardSlot, SeatView};
+        let seats = (0..2)
+            .map(Seat)
+            .map(|seat| {
+                let mut v = SeatView::new(seat, Chips::ZERO, Chips::ZERO);
+                v.cards = vec![if seat == obs.seat {
+                    CardSlot::Down(obs.own)
+                } else {
+                    obs.revealed.map_or(CardSlot::Down(None), CardSlot::Up)
+                }];
+                v
+            })
+            .collect();
+        engine::TableView {
+            game: self.meta.display_name.into(),
+            phase: String::new(),
+            viewer: obs.seat,
+            button: obs.button,
+            to_act: None,
+            seats,
+            boards: Vec::new(),
+            pots: Vec::new(),
+            wilds: Vec::new(),
+            notes: Vec::new(),
+        }
     }
 
     fn private_cards(&self, s: &State, seat: Seat) -> engine::CardVec {

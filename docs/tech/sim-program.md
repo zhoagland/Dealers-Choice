@@ -109,8 +109,11 @@ Heads-up ladders don't fit multiway games, and a full round robin of 10 presets 
 - **Decision grids:** `dc spot` in batch: a TOML grid of spots (stack/pot/position/hand) → ranked actions with
   EV ± SE per cell. Uses the coach's budget (FR-EV-5).
 - Known bias: ISMCTS opponent models over-fold and under-value checks (handbook §7). Study reports print that
-  caveat, and S5 depends on backlog #1 (better rollouts) for credible numbers. **S5 starts after rollout
-  improvements land.**
+  caveat. Backlog #1 (strength-aware rollouts) landed 2026-11-11 (`bots.md` §2 note).
+- **Built (2026-11-11):** `kind = "study"` campaigns run `dc analyze` (starting-hand and decision dashboards
+  for every game with analysis hooks; scripted games now report decisions by betting round and hand
+  strength) and, with `spots = "<grid.toml>"`, evaluate a spot grid into `reports/<name>/spots.html`
+  (`dc spot <grid.toml>` with `[[spots]]` entries does the same on its own).
 
 ### 4.4 Blueprints (S6)
 MCCFR needs small games or abstraction (bots.md §3).
@@ -119,6 +122,43 @@ MCCFR needs small games or abstraction (bots.md §3).
 - With abstraction work (backlog #7): **heads-up NL Hold'em** with equity-histogram card buckets and the FR-BT-7
   bet menu. Multi-day CPU training; checkpointed (same chunk/resume model).
 - Blueprints are stored per FR-ST-3 and loaded by an MCCFR policy in play and sims.
+
+### 4.5 Study campaigns: `dc analyze` (built ahead of S5, 2026-11-10)
+
+Owner request (2026-11-10): "a script to start a simulation that tests every game for millions of hands … a
+dashboard per game describing the best starting hand, the hands that should and shouldn't be played … then board
+variants to see hand strength, when to bet, how much to bet." A **hand** = one deal played to showdown or until
+everyone else folds. **Every** simulated hand feeds the aggregates; nothing is sampled.
+
+- `dc analyze run [--games a,b] [--hands N] [--bots spec,...] [--seats N] [--chunk N] [--seed N] [--threads N]`
+  creates or updates `<data_root>/analysis/<name>/campaign.toml` and runs it. Defaults: every registered game
+  except the solver fixtures, 6 seats (or the game's max), `ismcts:3:300` in every seat, all cores but two.
+  `pause`, `status`, `report` (rebuild dashboards from chunks).
+- Chunks have independent seeds; a killed or paused run resumes by skipping finished `chunk-*.json` files.
+  `status.json` is rewritten after every chunk, and each game's `dashboard.html` is regenerated.
+- **Storage:** no per-hand records. `sim::study` keeps running means (Welford) per key, so millions of hands cost
+  kilobytes per chunk.
+- **Starting hands:** result per (starting-hand class, position from the button, first action). Comparing fold
+  with call/raise for the same class and position ranks hands as play / don't play.
+- **Decisions:** result per (street, board texture, hand-strength bucket, action). Bets are bucketed by size
+  relative to the pot (`SizeBucket`: ⅓, ⅔, pot, over, all-in); non-betting choices use the game's label (e.g.
+  "declare High"). The dashboard pivots rows by hand strength or by board texture.
+- Games opt in through the analysis hooks on `Game` (starting-hand class, decision context, labels); Hold'em and
+  FTQ have them. Each new family PR adds them so its games appear in `dc analyze`.
+- Caveat printed on every dashboard: these are outcomes of the bot population's own play, not solved values,
+  and inherit the ISMCTS biases in §4.3.
+
+### 4.6 Local campaign UI: `dc lab` (requested 2026-11-10, built 2026-11-11)
+
+Owner request: "a local HTML interface for configuring and starting simulation campaigns."
+- `dc lab [--port N] [--no-open]` starts a localhost-only HTTP server (std only, 127.0.0.1, any free port, opens the browser) that
+  serves one page: pick games, hands, bots per seat, seats, threads; save as `campaign.toml`; start / pause /
+  resume; live progress from `status.json`; links to each `dashboard.html` and `index.html`.
+- Runs are spawned as a detached `dc analyze run --name <n>` process, so closing the page or the server never
+  kills a campaign. The UI is a thin editor over the same files the CLI uses.
+- No auth (loopback only); the server refuses foreign `Host` headers and non-JSON POSTs. A campaign holds an OS
+  file lock (`run.lock`) while running, so it cannot be started twice and a crashed run never looks "running".
+- Later: same page drives Phase 2 campaign kinds (§1) once `dc campaign` exists.
 
 ## 5. Storage
 
@@ -144,3 +184,16 @@ visible and can be filtered or re-run.
 | S6 | Blueprints for Indian Poker and 3-2-1 Drop; HU Hold'em abstraction | Indian Poker blueprint beats ISMCTS:7 with CI; HUNL training checkpoints |
 
 S1–S3 start right after the stack merge (M9) using Hold'em and FTQ, and grow as game families land.
+
+**Status (2026-11-11): S1–S6 built.**
+- S1/S2: `dc campaign plan|run|status|pause|resume|report` (`crates/cli/src/campaign.rs`), frozen binary
+  `<data_root>/bin/dc-<sha>.exe`, chunked resume, one offline HTML report per campaign.
+- S3: `config/campaigns/balance-v1.toml` covers every game (`games = ["all"]`); `balance-ismcts.toml` uses
+  low-budget ISMCTS for realism.
+- S4: `ladder-v1.toml`; ratings by weighted least squares (`campaign::ladder_fit`), reported per game so
+  FR-BT-5 (same preset ≈ same strength everywhere) can be read across columns.
+- S5: strength-aware rollouts (backlog #1), study campaigns over `dc analyze`, spot grids.
+- S6: `blueprint-v1.toml`; MCCFR checkpoints (`Mccfr::checkpoint/restore`); Indian Poker with exact
+  exploitability; 3-2-1 Drop vs ISMCTS; heads-up Hold'em through `games::holdem_abstract` (8 strength buckets
+  per street, pot/all-in bets, ≤ 2 raises per street): ~150 k information sets per 20 k iterations, 12 MB
+  checkpoints, resumable. Measured (3 k iterations): Indian Poker exploitability 1.33 → 0.64 per hand.

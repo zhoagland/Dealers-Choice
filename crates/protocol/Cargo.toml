@@ -1,0 +1,11 @@
+[package]
+name = "protocol"
+description = "Web table messages between the server and the browser (docs/tech/web.md §3)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+engine = { path = "../engine" }
+serde = { workspace = true }
+serde_json = { workspace = true }

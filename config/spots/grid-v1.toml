@@ -1,0 +1,47 @@
+# Spot grid for the strategy study (FR-SP-6): `dc spot config/spots/grid-v1.toml` writes
+# config/spots/grid-v1.grid.html; the study-v1 campaign includes it in its report.
+
+[[spots]]
+name = "Flop, 9-high, checked to you (heads-up)"
+seats = 2
+button = 0
+stacks = [100.0, 100.0]
+hero = 0
+hero_cards = "9c5d"
+board = "Kh7s2d"
+actions = ["c", "c", "c"]
+playouts = 40000
+
+[[spots]]
+name = "Flop, top pair, checked to you (heads-up)"
+seats = 2
+button = 0
+stacks = [100.0, 100.0]
+hero = 0
+hero_cards = "KcQd"
+board = "Kh7s2d"
+actions = ["c", "c", "c"]
+playouts = 40000
+
+[[spots]]
+name = "Flop, flush draw facing a pot-size bet (heads-up)"
+seats = 2
+button = 0
+stacks = [100.0, 100.0]
+hero = 0
+hero_cards = "AhTh"
+board = "Kh7h2d"
+actions = ["c", "c", "r 4"]
+playouts = 40000
+
+[[spots]]
+name = "Preflop, AK facing a raise, 6-max vs a tight range"
+seats = 6
+button = 5
+stacks = [100.0, 100.0, 100.0, 100.0, 100.0, 100.0]
+hero = 3
+hero_cards = "AsKd"
+actions = ["r 3"]
+playouts = 40000
+[spots.ranges]
+"2" = "TT+, AQs+, AKo"

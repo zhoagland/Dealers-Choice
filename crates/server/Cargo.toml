@@ -1,0 +1,31 @@
+[package]
+name = "server"
+description = "dc-server: the multiplayer web app (docs/tech/web.md)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "dc-server"
+path = "src/main.rs"
+
+[dependencies]
+engine = { path = "../engine" }
+games = { path = "../games" }
+sim = { path = "../sim" }
+storage = { path = "../storage" }
+protocol = { path = "../protocol" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rand = { workspace = true }
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["fs"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+getrandom = "0.3"
+sha2 = "0.10"
+base64 = "0.22"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+
+[dev-dependencies]
+tokio-tungstenite = "0.26"

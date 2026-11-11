@@ -65,6 +65,16 @@ impl Range {
         Ok(r)
     }
 
+    /// A range from explicit `(card, card, weight)` entries.
+    pub fn from_weights(entries: impl IntoIterator<Item = (Card, Card, f64)>) -> Range {
+        Range {
+            weights: entries
+                .into_iter()
+                .map(|(a, b, w)| (combo(a, b), w))
+                .collect(),
+        }
+    }
+
     /// Number of combos with nonzero weight.
     pub fn len(&self) -> usize {
         self.weights.values().filter(|&&w| w > 0.0).count()

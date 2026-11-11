@@ -3,22 +3,29 @@
 //!
 //! Design docs: `docs/tech/engine.md`, `docs/api/game-driver.md`.
 
+pub mod analysis;
 pub mod betting;
 pub mod card;
+pub mod carry;
 pub mod eval;
 pub mod game;
 pub mod pot;
 pub mod replay;
 pub mod rng;
 pub mod session;
+pub mod showdown;
 pub mod testing;
+pub mod view;
 
 // Re-export the most used types so callers can write `engine::Card` instead of
 // `engine::card::Card`.
+pub use analysis::{AnalysisLabels, DecisionContext, SizeBucket};
 pub use card::{Card, CardSet, Deck, Rank, Suit};
+pub use carry::{GameCarry, HandCarry};
 pub use eval::{Category, HandValue};
 pub use game::{
     API_VERSION, ActionClass, CardVec, Chips, Game, GameLength, GameMeta, HandSetup, HiddenSampler,
     IllegalAction, Seat, StakeModel, ToAct, UniformSampler,
 };
 pub use rng::DetRng;
+pub use view::TableView;
