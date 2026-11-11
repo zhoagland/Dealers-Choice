@@ -115,7 +115,9 @@ playout ≈ determinize + ~10–30 `apply` calls + `observe`/hash at tree nodes 
 - **Hold'em scope:** full HUNL needs card abstraction (equity buckets) plus action abstraction.
   Without them it is intractable: Johanson (2013) counts ~10¹⁶¹ information sets for 200 bb HUNL; 20 bb stacks shrink that by many orders of magnitude, but it's still far beyond tabular. **This is a stretch goal after M6.** It
   needs an `Abstraction` trait mapping `Observation → bucket key`, which the table key would use instead
-  of the raw observation. Planned, not v1.
+  of the raw observation. **Phase 2 (S6):** `games::holdem_abstract` is the abstracted heads-up game
+  (8 equity buckets, pot/all-in bets, at most 2 raises a street) that `dc train` solves; see
+  `sim-program.md` S6.
 - **Off-menu actions** (a human bets 0.8 pot when the menu has ⅔ and 1): map to the menu
   with pseudo-harmonic mapping (Ganzfried & Sandholm, 2013). Only needed for MCCFR bots;
   ISMCTS searches from the true state.
