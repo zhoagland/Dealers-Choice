@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sim Lab</title>
+<style>
+:root { color-scheme: light; --surface-0: #f5f4f1; --surface-1: #fcfcfb; --surface-2: #f0efec; --border: #dddcd7;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7974; --accent: #2a78d6; --accent-text: #fff;
+  --ok: #2f8a4c; --warn: #b26b00; --bad: #c2412f; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; --surface-0: #121211; --surface-1: #1a1a19;
+  --surface-2: #242422; --border: #383835; --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86; --accent: #3987e5;
+  --ok: #4fb36d; --warn: #e0a040; --bad: #e46a58; } }
+:root[data-theme="dark"] { color-scheme: dark; --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #242422; --border: #383835;
+  --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86; --accent: #3987e5; --ok: #4fb36d; --warn: #e0a040; --bad: #e46a58; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--surface-0); color: var(--text-primary); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 24px 16px; display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+@media (max-width: 860px) { main { grid-template-columns: minmax(0, 1fr); } }
+header { grid-column: 1 / -1; }
+h1 { font-size: 24px; margin: 0 0 4px; }
+h2 { font-size: 16px; margin: 0 0 10px; }
+.sub { color: var(--text-secondary); margin: 0; }
+a { color: var(--accent); }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin: 0 0 12px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.spread { justify-content: space-between; }
+.state { font-size: 13px; color: var(--text-secondary); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--text-muted); }
+.dot.run { background: var(--ok); } .dot.paused { background: var(--warn); } .dot.fail { background: var(--bad); }
+.game { margin-top: 8px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.game .row { justify-content: space-between; color: var(--text-secondary); }
+.bar { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; margin-top: 3px; }
+.bar > i { display: block; height: 100%; background: var(--accent); }
+button { font: inherit; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-primary); border-radius: 7px;
+  padding: 6px 12px; cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+button:disabled { opacity: .5; cursor: default; }
+label { display: grid; gap: 3px; font-size: 13px; color: var(--text-secondary); }
+input[type=text], input[type=number] { font: inherit; color: var(--text-primary); background: var(--surface-0); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 8px; width: 100%; min-width: 0; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; color: var(--text-muted); font-weight: 500; padding: 4px 6px; }
+td { padding: 4px 6px; border-top: 1px solid var(--border); vertical-align: middle; }
+td.seats { width: 70px; } td.pick { width: 28px; }
+.hint { font-size: 12px; color: var(--text-muted); margin: 6px 0 0; }
+.msg { min-height: 20px; font-size: 13px; margin-top: 8px; }
+.msg.err { color: var(--bad); } .msg.ok { color: var(--ok); }
+.empty { color: var(--text-muted); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Sim lab</h1>
+    <p class="sub">Configure and run hand-study campaigns. Runs keep going if you close this page; dashboards update after every chunk.</p>
+  </header>
+
+  <section>
+    <h2>Campaigns</h2>
+    <div id="campaigns"><p class="empty">Loading…</p></div>
+  </section>
+
+  <section>
+    <h2 id="editor-title">New campaign</h2>
+    <div class="card">
+      <div class="grid2">
+        <label>Name <input type="text" id="name" value="study" maxlength="64" pattern="[A-Za-z0-9_-]+"></label>
+        <label>Hands per game <input type="number" id="hands" value="1000000" min="1" step="1000"></label>
+        <label>Deals per chunk <input type="number" id="chunk" value="5000" min="1" step="500"></label>
+        <label>Seed <input type="number" id="seed" value="2026" min="0"></label>
+        <label>Threads <input type="number" id="threads" placeholder="auto (all cores but two)" min="1"></label>
+      </div>
+      <h2 style="margin-top:16px">Games</h2>
+      <table>
+        <thead><tr><th></th><th>Game</th><th>Seats</th><th>Bots (one, or one per seat)</th></tr></thead>
+        <tbody id="games"></tbody>
+      </table>
+      <p class="hint">Bots: <span id="bot-examples"></span>. Higher ISMCTS levels play better but run far slower.</p>
+      <datalist id="bot-list"></datalist>
+      <div class="row" style="margin-top:12px">
+        <button id="save">Save</button>
+        <button id="save-start" class="primary">Save &amp; start</button>
+        <button id="reset">New</button>
+      </div>
+      <div class="msg" id="msg"></div>
+    </div>
+  </section>
+</main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmtN = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n);
+let STATE = null;
+
+async function api(path, body) {
+  const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(path, opts);
+  const text = await r.text();
+  if (!r.ok) throw new Error(text || r.statusText);
+  return text ? JSON.parse(text) : null;
+}
+
+function say(text, ok) {
+  $("msg").textContent = text;
+  $("msg").className = "msg " + (ok ? "ok" : "err");
+}
+
+function renderEditor(c) {
+  const byId = new Map((c ? c.game : []).map((g) => [g.id, g]));
+  const fresh = !c;
+  $("editor-title").textContent = c ? `Edit "${c.name}"` : "New campaign";
+  $("name").value = c ? c.name : "study";
+  $("hands").value = c ? c.hands_per_game : 1000000;
+  $("chunk").value = c ? c.chunk_deals : 5000;
+  $("seed").value = c ? c.seed : 2026;
+  $("threads").value = c && c.threads ? c.threads : "";
+  $("games").innerHTML = STATE.games.map((g) => {
+    const cg = byId.get(g.id);
+    const on = cg ? true : fresh && STATE.default_games.includes(g.id);
+    const seats = cg ? cg.seats : Math.min(Math.max(6, g.min_seats), g.max_seats);
+    const bots = cg ? cg.bots.join(",") : STATE.default_bot;
+    return `<tr data-id="${esc(g.id)}">
+      <td class="pick"><input type="checkbox" ${on ? "checked" : ""} aria-label="include ${esc(g.name)}"></td>
+      <td>${esc(g.name)}</td>
+      <td class="seats"><input type="number" min="${g.min_seats}" max="${g.max_seats}" value="${seats}"></td>
+      <td><input type="text" list="bot-list" value="${esc(bots)}"></td></tr>`;
+  }).join("");
+  $("msg").textContent = "";
+}
+
+function readEditor() {
+  const threads = $("threads").value.trim();
+  const game = [...$("games").querySelectorAll("tr")]
+    .filter((tr) => tr.querySelector("input[type=checkbox]").checked)
+    .map((tr) => {
+      const [, seats, bots] = tr.querySelectorAll("input");
+      return { id: tr.dataset.id, seats: Number(seats.value), bots: bots.value.split(",").map((s) => s.trim()).filter(Boolean) };
+    });
+  return {
+    name: $("name").value.trim(),
+    hands_per_game: Number($("hands").value),
+    chunk_deals: Number($("chunk").value),
+    seed: Number($("seed").value),
+    threads: threads ? Number(threads) : null,
+    game,
+  };
+}
+
+function dot(c) {
+  if (c.running) return "run";
+  if (c.status.state.startsWith("paused")) return "paused";
+  if (c.status.state.startsWith("failed")) return "fail";
+  return "";
+}
+
+function renderCampaigns() {
+  const list = STATE.campaigns;
+  if (!list.length) {
+    $("campaigns").innerHTML = `<p class="empty">No campaigns yet. Make one on the right.</p>`;
+    return;
+  }
+  $("campaigns").innerHTML = list.map((c) => {
+    const n = encodeURIComponent(c.name);
+    const games = (c.status.games || []).map((g) => {
+      const pct = Math.min(100, 100 * g.hands / Math.max(1, g.target_hands));
+      return `<div class="game"><div class="row"><span>${esc(g.display_name)}</span>
+        <span>${fmtN(g.hands)} / ${fmtN(g.target_hands)} · ${Math.round(g.hands_per_sec).toLocaleString()} hands/s</span></div>
+        <div class="bar"><i style="width:${pct}%"></i></div></div>`;
+    }).join("");
+    const links = [
+      c.has_dashboards ? `<a href="/analysis/${n}/index.html" target="_blank" rel="noopener">Dashboards</a>` : "",
+      `<a href="/analysis/${n}/run.log" target="_blank" rel="noopener">Log</a>`,
+    ].filter(Boolean).join(" · ");
+    return `<div class="card" data-name="${esc(c.name)}">
+      <div class="row spread"><b>${esc(c.name)}</b>
+        <div class="row">
+          <button data-act="start" ${c.running ? "disabled" : ""}>${c.status.games && c.status.games.length ? "Resume" : "Start"}</button>
+          <button data-act="pause" ${c.running ? "" : "disabled"}>Pause</button>
+          <button data-act="edit" ${c.running ? "disabled" : ""}>Edit</button>
+        </div></div>
+      <div class="state"><span class="dot ${dot(c)}"></span>${esc(c.running ? "running" : c.status.state)}${
+        c.status.updated_unix ? " · updated " + new Date(c.status.updated_unix * 1000).toLocaleTimeString() : ""} · ${links}</div>
+      ${games}</div>`;
+  }).join("");
+}
+
+async function refresh() {
+  try {
+    STATE = await api("/api/state");
+    renderCampaigns();
+  } catch (e) {
+    $("campaigns").innerHTML = `<p class="empty">Can't reach dc lab (${esc(e.message)}). Is it still running?</p>`;
+  }
+}
+
+async function save(start) {
+  const c = readEditor();
+  try {
+    await api("/api/campaign", c);
+    if (start) await api(`/api/start?name=${encodeURIComponent(c.name)}`, {});
+    say(start ? `Started "${c.name}".` : `Saved "${c.name}".`, true);
+    refresh();
+  } catch (e) {
+    say(e.message, false);
+  }
+}
+
+$("campaigns").addEventListener("click", async (ev) => {
+  const b = ev.target.closest("button");
+  if (!b) return;
+  const name = b.closest(".card").dataset.name;
+  const c = STATE.campaigns.find((x) => x.name === name);
+  try {
+    if (b.dataset.act === "edit") {
+      if (c && c.campaign) renderEditor(c.campaign);
+      return;
+    }
+    b.disabled = true;
+    await api(`/api/${b.dataset.act}?name=${encodeURIComponent(name)}`, {});
+    refresh();
+  } catch (e) {
+    alert(e.message);
+    refresh();
+  }
+});
+$("save").addEventListener("click", () => save(false));
+$("save-start").addEventListener("click", () => save(true));
+$("reset").addEventListener("click", () => renderEditor(null));
+
+(async () => {
+  await refresh();
+  if (!STATE) return;
+  $("bot-examples").textContent = STATE.bot_examples.join(", ");
+  $("bot-list").innerHTML = STATE.bot_examples.map((b) => `<option value="${esc(b)}">`).join("");
+  renderEditor(null);
+  setInterval(refresh, 3000);
+})();
+</script>
+</body>
+</html>

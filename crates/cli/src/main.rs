@@ -6,6 +6,7 @@
 mod analyze;
 mod config_tui;
 mod human;
+mod lab;
 mod play;
 mod player;
 mod settings;
@@ -59,6 +60,8 @@ enum Command {
     /// Study campaigns: millions of hands per game, with a dashboard per game.
     #[command(subcommand)]
     Analyze(analyze::AnalyzeCmd),
+    /// Local web page to configure, start and watch study campaigns.
+    Lab(lab::LabArgs),
 }
 
 fn main() {
@@ -77,6 +80,7 @@ fn main() {
         Command::Sim(args) => simulate::sim(args, &root, &profiles),
         Command::BenchSim(args) => simulate::bench(args),
         Command::Analyze(cmd) => analyze::run(cmd, &root),
+        Command::Lab(args) => lab::run(args, &root),
     };
     if let Err(e) = result {
         eprintln!("error: {e}");

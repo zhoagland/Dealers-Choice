@@ -145,15 +145,16 @@ everyone else folds. **Every** simulated hand feeds the aggregates; nothing is s
 - Caveat printed on every dashboard: these are outcomes of the bot population's own play, not solved values,
   and inherit the ISMCTS biases in §4.3.
 
-### 4.6 Local campaign UI: `dc lab` (requested 2026-11-10, not built)
+### 4.6 Local campaign UI: `dc lab` (requested 2026-11-10, built 2026-11-11)
 
 Owner request: "a local HTML interface for configuring and starting simulation campaigns."
-- `dc lab` starts a localhost-only HTTP server (bound to 127.0.0.1, random free port, opens the browser) that
+- `dc lab [--port N] [--no-open]` starts a localhost-only HTTP server (std only, 127.0.0.1, any free port, opens the browser) that
   serves one page: pick games, hands, bots per seat, seats, threads; save as `campaign.toml`; start / pause /
   resume; live progress from `status.json`; links to each `dashboard.html` and `index.html`.
 - Runs are spawned as a detached `dc analyze run --name <n>` process, so closing the page or the server never
   kills a campaign. The UI is a thin editor over the same files the CLI uses.
-- No auth (loopback only); the server refuses non-loopback `Host` headers.
+- No auth (loopback only); the server refuses foreign `Host` headers and non-JSON POSTs. A campaign holds an OS
+  file lock (`run.lock`) while running, so it cannot be started twice and a crashed run never looks "running".
 - Later: same page drives Phase 2 campaign kinds (§1) once `dc campaign` exists.
 
 ## 5. Storage

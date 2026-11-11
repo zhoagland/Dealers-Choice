@@ -303,6 +303,35 @@ pub fn run(cmd: AnalyzeCmd, root: &DataRoot) -> CliResult {
     }
 }
 
+/// Take the campaign's run lock, or fail if another process is running it.
+fn lock_run(dir: &Path) -> Result<std::fs::File, String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join("run.lock"))
+        .map_err(|e| e.to_string())?;
+    match f.try_lock() {
+        Ok(()) => Ok(f),
+        Err(std::fs::TryLockError::WouldBlock) => {
+            Err(format!("{} is already running", dir.display()))
+        }
+        Err(std::fs::TryLockError::Error(e)) => Err(e.to_string()),
+    }
+}
+
+/// Whether some process is running the campaign in `dir` right now.
+pub fn is_running(dir: &Path) -> bool {
+    let Ok(f) = std::fs::OpenOptions::new()
+        .write(true)
+        .open(dir.join("run.lock"))
+    else {
+        return false;
+    };
+    matches!(f.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+}
+
 /// Every campaign's status (for `dc analyze status` and `dc lab`).
 pub fn list_status(root: &DataRoot) -> Vec<Status> {
     let mut out = Vec::new();
@@ -407,6 +436,8 @@ fn run_campaign(c: &Campaign, dir: &Path) -> CliResult {
             .max(1)
     });
     set_threads(Some(threads))?;
+    // Held for the whole run; the OS drops it if the process dies, so it's never stale.
+    let _lock = lock_run(dir)?;
     let _ = std::fs::remove_file(dir.join("PAUSE"));
 
     let mut aggs = Vec::new();
