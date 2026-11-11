@@ -61,6 +61,8 @@ pub fn default_spec() -> RunSpec {
         stack: None,
         dealer_ante: false,
         study: false,
+        balance: false,
+        config: None,
     }
 }
 
@@ -183,7 +185,7 @@ pub(crate) fn run_spec(
     }
     let r = with_game(
         &spec.game,
-        None,
+        spec.config.as_ref(),
         Run {
             spec,
             records,
@@ -267,6 +269,8 @@ pub fn bench(args: BenchArgs) -> CliResult {
             stack: None,
             dealer_ante: false,
             study: false,
+            balance: false,
+            config: None,
         };
         let r = run_spec(&spec, None, None)?;
         let t = &r.throughput;

@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Campaign Report</title>
+<style>
+:root { color-scheme: light; --surface-0: #f5f4f1; --surface-1: #fcfcfb; --surface-2: #f0efec; --border: #dddcd7;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7974; --accent: #2a78d6; --pos: #2f8a4c; --neg: #c2412f; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; --surface-0: #121211; --surface-1: #1a1a19;
+  --surface-2: #242422; --border: #383835; --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86; --accent: #3987e5;
+  --pos: #4fb36d; --neg: #e46a58; } }
+:root[data-theme="dark"] { color-scheme: dark; --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #242422; --border: #383835;
+  --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86; --accent: #3987e5; --pos: #4fb36d; --neg: #e46a58; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--surface-0); color: var(--text-primary); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 1200px; margin: 0 auto; padding: 24px 16px; }
+h1 { font-size: 24px; margin: 0 0 4px; }
+h2 { font-size: 17px; margin: 28px 0 8px; }
+.sub { color: var(--text-secondary); margin: 0 0 8px; }
+.note { color: var(--text-muted); font-size: 12px; margin: 4px 0 12px; }
+.wrap { overflow-x: auto; background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+th { text-align: left; color: var(--text-muted); font-weight: 500; padding: 7px 8px; cursor: pointer; white-space: nowrap; background: var(--surface-1); }
+td { padding: 6px 8px; border-top: 1px solid var(--border); white-space: nowrap; }
+td.num, th.num { text-align: right; }
+.ci { color: var(--text-muted); font-size: 12px; }
+.pos { color: var(--pos); } .neg { color: var(--neg); }
+details { margin: 8px 0; background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; }
+summary { cursor: pointer; font-weight: 600; }
+.bars { display: grid; gap: 4px; margin-top: 8px; }
+.bar { display: grid; grid-template-columns: 120px 1fr 130px; gap: 8px; align-items: center; font-size: 12px; }
+.track { position: relative; height: 12px; background: var(--surface-2); border-radius: 3px; }
+.track > i { position: absolute; top: 0; height: 100%; border-radius: 3px; }
+.track > b { position: absolute; top: -2px; height: 16px; border-left: 1px solid var(--text-muted); border-right: 1px solid var(--text-muted); }
+.mid { position: absolute; left: 50%; top: -3px; bottom: -3px; border-left: 1px dashed var(--text-muted); }
+input[type=search] { font: inherit; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-1); color: var(--text-primary); width: 100%; max-width: 320px; margin: 4px 0 8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">Campaign</h1>
+  <p class="sub" id="sub"></p>
+  <div id="ladder"></div>
+  <div id="balance"></div>
+  <h2>Runs</h2>
+  <input type="search" id="filter" placeholder="Filter runs (game, bot, sweep)…">
+  <div id="runs"></div>
+</main>
+<script id="data" type="application/json">"__DC_DATA__"</script>
+<script>
+"use strict";
+const D = JSON.parse(document.getElementById("data").textContent);
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const f3 = (x) => (x >= 0 ? "+" : "") + x.toFixed(3);
+const fx = (x, d = 2) => (Number.isFinite(x) ? x.toFixed(d) : "–");
+const n = (x) => x.toLocaleString();
+const sign = (x, ci) => (x - ci > 0 ? "pos" : x + ci < 0 ? "neg" : "");
+
+$("title").textContent = `${D.name} · ${D.kind}`;
+$("sub").textContent = `${D.runs.length} runs · binary ${D.binary_sha} · generated ${new Date(D.generated_unix * 1000).toLocaleString()}`;
+
+function sortable(table) {
+  table.querySelectorAll("th").forEach((th, col) => {
+    th.addEventListener("click", () => {
+      const rows = [...table.tBodies[0].rows];
+      const asc = th.dataset.asc !== "1";
+      th.dataset.asc = asc ? "1" : "0";
+      rows.sort((a, b) => {
+        const x = a.cells[col].dataset.v ?? a.cells[col].textContent;
+        const y = b.cells[col].dataset.v ?? b.cells[col].textContent;
+        const nx = parseFloat(x), ny = parseFloat(y);
+        const r = Number.isFinite(nx) && Number.isFinite(ny) ? nx - ny : String(x).localeCompare(String(y));
+        return asc ? r : -r;
+      });
+      rows.forEach((r) => table.tBodies[0].appendChild(r));
+    });
+  });
+}
+
+// Strength ladder (FR-SP-5)
+if (D.ratings.length) {
+  const games = [...new Set(D.ratings.map((r) => r.game))];
+  const bots = [...new Set(D.ratings.map((r) => r.bot))];
+  let html = `<h2>Strength ladder</h2><p class="note">Rating = result per hand (eval units) relative to the middle preset, fitted by weighted least squares over every table; ± is the 95 % interval. FR-BT-5 asks that a preset rate about the same in every game.</p>`;
+  html += `<div class="wrap"><table><thead><tr><th>Bot</th>${games.map((g) => `<th class="num">${esc(g)}</th>`).join("")}</tr></thead><tbody>`;
+  for (const b of bots) {
+    html += `<tr><td>${esc(b)}</td>` + games.map((g) => {
+      const r = D.ratings.find((x) => x.game === g && x.bot === b);
+      return r ? `<td class="num ${sign(r.rating, r.ci95)}" data-v="${r.rating}">${f3(r.rating)} <span class="ci">±${fx(r.ci95, 3)}</span></td>` : `<td class="num">–</td>`;
+    }).join("") + `</tr>`;
+  }
+  $("ladder").innerHTML = html + `</tbody></table></div>`;
+  sortable($("ladder").querySelector("table"));
+}
+
+// Balance (FR-SP-4)
+const bal = D.runs.filter((r) => r.balance);
+if (bal.length) {
+  let html = `<h2>Balance</h2><p class="note">Hands = sample size. Swing = standard deviation of a seat's result per hand. Pot = chips won by the hand's winners (± 95 %), and its 90th percentile. Showdown rate with its 95 % Wilson interval. Hands per game for multi-hand games. All in the game's eval unit. Click a column to sort.</p>`;
+  html += `<div class="wrap"><table><thead><tr><th>Game</th><th class="num">Seats</th><th>Sweep</th><th class="num">Hands</th><th class="num">Swing</th><th class="num">Avg pot</th><th class="num">P90 pot</th><th class="num">Showdown</th><th class="num">Hands/game</th></tr></thead><tbody>`;
+  for (const r of bal) {
+    const b = r.balance;
+    const potCi = b.pot.n > 1 ? 1.96 * Math.sqrt(b.pot.m2 / (b.pot.n - 1) / b.pot.n) : 0;
+    const sd = r.showdown_ci ? ` <span class="ci">${fx(100 * r.showdown_ci[0], 0)}–${fx(100 * r.showdown_ci[1], 0)}%</span>` : "";
+    html += `<tr><td>${esc(r.game_name)}</td><td class="num">${r.seats}</td><td>${esc(Object.entries(r.sweep).map(([k, v]) => `${k}=${v}`).join(", "))}</td>
+      <td class="num" data-v="${r.hands}">${n(r.hands)}</td><td class="num" data-v="${r.swing}">${fx(r.swing)}</td>
+      <td class="num" data-v="${r.pot_mean}">${fx(r.pot_mean)} <span class="ci">±${fx(potCi)}</span></td><td class="num" data-v="${r.pot_p90}">${fx(r.pot_p90, 0)}</td>
+      <td class="num" data-v="${r.showdown}">${fx(100 * r.showdown, 1)}%${sd}</td><td class="num" data-v="${r.hands_per_game}">${fx(r.hands_per_game, 1)}</td></tr>`;
+  }
+  $("balance").innerHTML = html + `</tbody></table></div>`;
+  sortable($("balance").querySelector("table"));
+}
+
+// Runs
+function renderRuns() {
+  const q = $("filter").value.trim().toLowerCase();
+  $("runs").innerHTML = D.runs
+    .filter((r) => !q || JSON.stringify([r.game, r.game_name, r.bots, r.sweep]).toLowerCase().includes(q))
+    .map((r) => {
+      const rows = r.bots.map(([b, m, ci]) => `<tr><td>${esc(b)}</td><td class="num ${sign(m, ci)}">${f3(m)}</td><td class="num ci">±${fx(ci, 3)}</td></tr>`).join("");
+      let pos = "";
+      if (r.position && r.position.length) {
+        const span = Math.max(0.01, ...r.position.map(([m, ci]) => Math.abs(m) + ci));
+        const x = (v) => 50 + (50 * v) / span;
+        pos = `<p class="note">Result per hand by position</p><div class="bars">` + r.position.map(([m, ci], i) => {
+          const label = i === r.position.length - 1 ? "button" : `${i + 1} left of button`;
+          const lo = x(Math.min(0, m)), hi = x(Math.max(0, m));
+          return `<div class="bar"><span>${label}</span><div class="track"><span class="mid"></span>
+            <i style="left:${lo}%;width:${hi - lo}%;background:${m >= 0 ? "var(--pos)" : "var(--neg)"}"></i>
+            <b style="left:${x(m - ci)}%;width:${x(m + ci) - x(m - ci)}%"></b></div><span>${f3(m)} ±${fx(ci, 3)}</span></div>`;
+        }).join("") + `</div>`;
+      }
+      return `<details><summary>${esc(r.id)} · ${esc(r.game_name)} v${r.game_version} · ${n(r.hands)} hands</summary>
+        <p class="note">Unit ${esc(r.eval_unit)} · ${fx(r.elapsed_sec, 1)} s · binary ${esc(r.binary_sha)}${Object.keys(r.sweep).length ? " · sweep " + esc(JSON.stringify(r.sweep)) : ""}</p>
+        <div class="wrap"><table><thead><tr><th>Bot (by seat)</th><th class="num">Per hand</th><th class="num">95 %</th></tr></thead><tbody>${rows}</tbody></table></div>${pos}</details>`;
+    })
+    .join("");
+}
+$("filter").addEventListener("input", renderRuns);
+renderRuns();
+</script>
+</body>
+</html>

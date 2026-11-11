@@ -304,7 +304,7 @@ pub fn run(cmd: AnalyzeCmd, root: &DataRoot) -> CliResult {
 }
 
 /// Take the campaign's run lock, or fail if another process is running it.
-fn lock_run(dir: &Path) -> Result<std::fs::File, String> {
+pub fn lock_dir(dir: &Path) -> Result<std::fs::File, String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let f = std::fs::OpenOptions::new()
         .create(true)
@@ -437,7 +437,7 @@ fn run_campaign(c: &Campaign, dir: &Path) -> CliResult {
     });
     set_threads(Some(threads))?;
     // Held for the whole run; the OS drops it if the process dies, so it's never stale.
-    let _lock = lock_run(dir)?;
+    let _lock = lock_dir(dir)?;
     let _ = std::fs::remove_file(dir.join("PAUSE"));
 
     let mut aggs = Vec::new();
@@ -490,6 +490,8 @@ fn run_campaign(c: &Campaign, dir: &Path) -> CliResult {
                 stack: None,
                 dealer_ante: false,
                 study: true,
+                balance: false,
+                config: None,
             };
             let report = match run_spec(&spec, None, None) {
                 Ok(r) => r,

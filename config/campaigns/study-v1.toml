@@ -1,0 +1,11 @@
+# Strategy study (FR-SP-6, sim-program.md §4.3/§4.5): starting-hand and decision dashboards.
+name = "study-v1"
+kind = "study"
+games = ["holdem_nl", "ftq"]
+seats = [6]
+hands_per_run = 1000000
+chunk_hands = 5000
+seed = 2026
+
+[population]
+mix = ["ismcts:3:300"]

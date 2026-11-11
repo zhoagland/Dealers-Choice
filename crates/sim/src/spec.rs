@@ -173,6 +173,13 @@ pub struct RunSpec {
     /// (`study.rs`). Costs a little speed; off by default.
     #[serde(default)]
     pub study: bool,
+    /// Collect balance statistics (`balance.rs`: pots, showdowns, position, game length).
+    #[serde(default)]
+    pub balance: bool,
+    /// The game's `Config` overrides as a TOML table (variations, house-rule flags), e.g.
+    /// `{ variants = ["hi_lo"] }`. `None` = the game's defaults.
+    #[serde(default)]
+    pub config: Option<toml::Table>,
 }
 
 fn yes() -> bool {

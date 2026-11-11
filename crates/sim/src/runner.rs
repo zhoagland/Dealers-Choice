@@ -24,6 +24,7 @@ use bots::{Policy, play_hand_with};
 use engine::rng::{Stream, derive_rng};
 use engine::{ActionClass, Chips, Game, GameCarry, GameLength, HandSetup, Seat, StakeModel, ToAct};
 
+use crate::balance::BalanceStats;
 use crate::encoding::{HandRecord, encode, encode_carry};
 use crate::spec::RunSpec;
 use crate::stats::Welford;
@@ -110,6 +111,8 @@ pub struct RunReport {
     pub records_kept: u64,
     /// Per-starting-hand and per-decision aggregates, when `spec.study`.
     pub study: Option<StudyRows>,
+    /// Balance statistics, when `spec.balance`.
+    pub balance: Option<BalanceStats>,
 }
 
 /// Everything one deal produced.
@@ -122,6 +125,7 @@ struct DealOutcome {
     bytes: u64,
     kept: Vec<Vec<u8>>,
     study: Option<Study>,
+    balance: Option<BalanceStats>,
 }
 
 /// Run `spec` on `game`. `on_progress(done, total)` is called after each batch.
@@ -151,6 +155,7 @@ pub fn run<G: Game>(
     let mut actions = vec![ActionCounts::default(); n];
     let (mut hands, mut decisions, mut bytes, mut kept) = (0u64, 0u64, 0u64, 0u64);
     let mut study = spec.study.then(Study::default);
+    let mut balance = spec.balance.then(BalanceStats::default);
 
     const BATCH: u64 = 1_024;
     let mut d0 = 0;
@@ -174,6 +179,9 @@ pub fn run<G: Game>(
                 kept += 1;
             }
             if let (Some(total), Some(part)) = (study.as_mut(), out.study.as_ref()) {
+                total.merge(part);
+            }
+            if let (Some(total), Some(part)) = (balance.as_mut(), out.balance.as_ref()) {
                 total.merge(part);
             }
         }
@@ -207,6 +215,7 @@ pub fn run<G: Game>(
         },
         records_kept: kept,
         study: study.map(|s| s.to_rows()),
+        balance,
     }
 }
 
@@ -227,6 +236,7 @@ fn play_deal<G: Game>(
         bytes: 0,
         kept: Vec::new(),
         study: spec.study.then(Study::default),
+        balance: spec.balance.then(BalanceStats::default),
     };
     let button = Seat((d % n as u64) as u8);
     let setup = HandSetup {
@@ -295,6 +305,19 @@ fn play_deal<G: Game>(
             for (&bot, pay) in seating.iter().zip(&result.payoffs) {
                 out.per_bot[bot] += pay.0 as f64 / unit / rotations as f64;
             }
+            if let Some(b) = out.balance.as_mut() {
+                // Results by position (first seat left of the button … the button).
+                let by_pos: Vec<f64> = (1..=n)
+                    .map(|k| (setup.button.index() + k) % n)
+                    .filter(|&i| setup.dealt_in(Seat(i as u8)))
+                    .map(|i| result.payoffs[i].0 as f64 / unit)
+                    .collect();
+                let folded = engine::showdown::folded_seats(game, &end);
+                let live = (0..n)
+                    .filter(|&i| setup.dealt_in(Seat(i as u8)) && folded & (1 << i) == 0)
+                    .count();
+                b.add_hand(&by_pos, live >= 2);
+            }
             // Classify each decision (replaying: `classify` needs the state at that moment).
             let mut state = carry.new_hand(game, &setup);
             let mut hand_study = out.study.is_some().then(|| HandStudy::new(n));
@@ -329,6 +352,9 @@ fn play_deal<G: Game>(
             out.decisions += result.decisions as u64;
             carry.finish_hand(game, &end, &result.payoffs);
         }
+        if let Some(b) = out.balance.as_mut() {
+            b.add_game(carry.hands() as u64);
+        }
         // Cap reached (or too few seats left) with a pot still carried: split it (D-G0-1).
         let eligible = all & !carry.seats_out(game);
         if let Some(pay) = carry.close(game, n as u8, eligible, all) {
@@ -360,6 +386,8 @@ mod tests {
             stack: None,
             dealer_ante: false,
             study: false,
+            balance: false,
+            config: None,
         }
     }
 

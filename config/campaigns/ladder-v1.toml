@@ -1,0 +1,12 @@
+# Strength ladder (FR-SP-5, sim-program.md §4.2): presets at 6-seat tables, rotated, duplicate deals.
+# Budgets are scaled down from strength.rs (the report says so).
+name = "ladder-v1"
+kind = "ladder"
+games = ["holdem_nl", "ftq"]
+seats = [6]
+hands_per_run = 3000
+chunk_hands = 600
+seed = 2026
+
+[population]
+mix = ["ismcts:1:50", "ismcts:3:100", "ismcts:5:200", "ismcts:7:400", "ismcts:9:800", "random", "callstation"]

@@ -4,6 +4,8 @@
 //! each enum variant a subcommand, and the doc comments become `--help` text.
 
 mod analyze;
+mod blueprint;
+mod campaign;
 mod config_tui;
 mod human;
 mod lab;
@@ -62,6 +64,9 @@ enum Command {
     Analyze(analyze::AnalyzeCmd),
     /// Local web page to configure, start and watch study campaigns.
     Lab(lab::LabArgs),
+    /// Simulation campaigns: balance, ladder, study, blueprint (plan, run, status, report).
+    #[command(subcommand)]
+    Campaign(campaign::CampaignCmd),
 }
 
 fn main() {
@@ -81,6 +86,7 @@ fn main() {
         Command::BenchSim(args) => simulate::bench(args),
         Command::Analyze(cmd) => analyze::run(cmd, &root),
         Command::Lab(args) => lab::run(args, &root),
+        Command::Campaign(cmd) => campaign::run(cmd, &root),
     };
     if let Err(e) = result {
         eprintln!("error: {e}");

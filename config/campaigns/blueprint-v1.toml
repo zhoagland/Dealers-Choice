@@ -1,0 +1,8 @@
+# Blueprints (FR-SP-7, sim-program.md §4.4): MCCFR for Indian Poker and 3-2-1 Drop, then the
+# abstracted heads-up Hold'em (checkpointed; resume continues training).
+name = "blueprint-v1"
+kind = "blueprint"
+games = ["indian_poker", "drop_321", "holdem_hu_abstract"]
+seats = [2]
+iterations = 200000
+seed = 2026

@@ -83,6 +83,28 @@ Locations: `--data-root` / `$DC_DATA_ROOT` / `./data` (DB, sim runs, blueprints,
 - Builds occasionally get killed (exit 0xE0000027) while downloading or compiling; just rerun.
   Progress is kept.
 
+## 2b. Simulation campaigns (Phase 2, track S)
+
+Campaign files live in `config/campaigns/` (`balance-v1`, `balance-ismcts`, `ladder-v1`, `study-v1`,
+`blueprint-v1`; format in `docs/tech/sim-program.md` §1).
+
+```
+dc campaign plan config/campaigns/balance-v1.toml     # runs, hands, time estimate
+dc campaign run  config/campaigns/balance-v1.toml --threads 12 --nice
+dc campaign status
+dc campaign pause balance-v1      # stops after the current chunk
+dc campaign resume balance-v1     # continues where it stopped
+dc campaign report balance-v1     # <data_root>/reports/balance-v1/index.html
+```
+
+- `run` copies `dc.exe` to `<data_root>/bin/dc-<git sha>.exe` and runs that copy, so `cargo build` keeps
+  working and every summary records the sha (FR-SP-8). A `-dirty` sha means uncommitted changes.
+- Chunks are files; killing the process loses at most the chunk in progress.
+- **Overnight on Windows:** open a terminal and run `start /min dc campaign run <file> --nice`, or create a
+  Scheduled Task (Task Scheduler → Create Task → Action: `dc.exe`, arguments
+  `campaign resume <name> --nice`, start in the repo folder; trigger "at 1:00 AM"). `resume` is idempotent.
+- `dc lab` starts and watches study campaigns from a browser page.
+
 ## 3. Debugging and replay
 
 Every hand is reproducible from **(game id + version, setup, action log)**, chance included
