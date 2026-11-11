@@ -7,3 +7,4 @@ pub mod holdem;
 pub mod kuhn;
 pub mod leduc;
 pub mod registry;
+pub mod script;

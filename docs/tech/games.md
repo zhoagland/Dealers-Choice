@@ -143,6 +143,41 @@ each over the seat's 7 cards. Both are computed only at showdown and for bot rol
 **Rule tests**: Queen as the last upcard ⇒ no wilds; Q→Q ⇒ Queens wild; Q→Q→…→Q→5 ⇒ fives wild; a Both declarer
 tying low loses everything; a side nobody declared rolls to the other side.
 
+## Scripted games (Phase 2, catalog G1–G7)
+
+One driver, `games::script::Scripted`, runs every game that is "deal, bet, maybe draw or declare,
+show down". A game is a `Script` in `script/games.rs`: its steps (`Down`, `Up`, `Board`, `Bet`,
+`Declare`, `Draw`, `Discard`, `RedRiver`), the hand rule per pot share (`Build::{Any, Exactly, Own}` ×
+`Ranking::{High, LowA6, Low27, Badugi, ShortDeck, SpadeHigh, SpadeLow, HighCard}`), who opens betting
+(`LeftOfButton`, `BestBoard`, `LowBoard`) and what each seat sees (`Normal`, `Indian`, `Showtime`).
+Pots go through `engine::pot::award_shares`; declarations map to `Claim`s. Determinization replays
+the public events with sampled hidden cards (draws included). Every game id is in
+`script::games::SCRIPTED_IDS` and the registry.
+
+Shared rules: D-ALL-1 money (chooser's $2 dealer ante, spread 50¢–$2, 4 bets/street; `structure =
+"PotLimit"` in config for pot limit), cards one at a time from the dealer's left, declarations and draws
+in turn from the dealer's left (declarations hidden until all are in), every live hand shown at
+showdown, burns not modelled. **D-HE-1** Hold'em variants play best five of hole + board (the Bible's
+"2 hole + 3 community" sentence is copied from its Texas Hold'em section, which plays any five).
+
+| Id | Game | Shape | Hands | Decisions |
+|---|---|---|---|---|
+| `omaha_pl` | Pot Limit Omaha | 4 down, flop/turn/river | 2o2 high | D-ALL-1 |
+| `omaha5` | 5 Card Omaha | 5 down, flop/turn/river, declare | 2o2 high + A-6 low | D-5CO-1/2, `high_only` |
+| `courchevel` | Courchevel | 5 down + 1 board up, then flop rest/turn/river, declare | 2o2 hi/lo | D-COU-1/2, `high_only` |
+| `red_river` | Red River | PLO + river+1, repeat while red, declare | 2o2 hi/lo | D-RR-1/2/3 |
+| `plo_double_board` | PLO Double Board Bomb Pot | $1 ante each, 2 boards, declare Top/Bottom/Both | 2o2 high per board | D-DB-1/2 (owner) |
+| `holdem_6plus` | 6+ Hold'em | 36 cards | short-deck high | D-6P-1 |
+| `holdem_showtime` | Showtime Hold'em | folded hands face up | high | |
+| `reverse_poker` | Reverse Poker | 5 down, 2-card board one at a time | high, any 5 of 7 | |
+| `holdem_split` | Split Hold'em | 2 boards, declare Top/Bottom/Both | high per board | |
+| `stud7` | 7 Card Stud | 2 down, bet, 4 up, 1 down | high | D-STUD-1 |
+| `razz` | Razz | stud | A-6 low | D-STUD-1 (lowest board first) |
+| `chicago_high` | Chicago High | stud | high + highest spade half | D-CHI-1/2 (owner) |
+| `chicago_low` | Chicago Low | stud | high + lowest spade half | D-CHI-1/2 (owner) |
+| `indian_poker` | Indian Poker | 1 card on your forehead, 1 bet | high card | D-IP-1 |
+| `holdem_indian` | Indian Texas Hold'em | Hold'em, hole cards seen by all but you | high | |
+
 ## Open questions
 - ~~G-1~~ Resolved: FTQ max 7 seats.
 - ~~G-2~~ Resolved: Q followed by Q ⇒ Queens wild.

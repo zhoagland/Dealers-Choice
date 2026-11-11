@@ -9,6 +9,7 @@
 use crate::card::{Card, CardSet};
 
 use super::HandValue;
+use super::extra::{eval_badugi, eval_low27, eval_short_deck};
 use super::high::eval_high_wild;
 use super::low_a6::eval_low_a6_wild;
 use super::oracle::{oracle_high, oracle_high_wild, oracle_low_a6, oracle_low_a6_wild};
@@ -105,8 +106,104 @@ impl Evaluator for LowA6 {
     }
 }
 
+/// Naturals for rankings that never use wilds: `None` if any card is wild or the count is off.
+fn no_wild(hand: &HandCards, counts: std::ops::RangeInclusive<usize>) -> Option<CardSet> {
+    let (nat, w) = hand.private.union(hand.board).split_wild(hand.wild);
+    (w == 0 && counts.contains(&nat.len())).then_some(nat)
+}
+
+/// Brute force: the best value of `f` over every 5-card subset (independent of the fast
+/// functions' own subset loops).
+fn brute5(set: CardSet, f: impl Fn(CardSet) -> HandValue) -> HandValue {
+    let list = cards(set);
+    let mut best = HandValue(0);
+    super::oracle::for_each_subset(&list, 5, |five| {
+        best = best.max(f(five.iter().copied().collect()));
+    });
+    best
+}
+
+/// Deuce-to-seven low (2-7 draw games). No wilds.
+pub struct Low27;
+
+impl Evaluator for Low27 {
+    fn id(&self) -> &'static str {
+        "low_27"
+    }
+    fn description(&self) -> &'static str {
+        "Deuce-to-seven low: aces high, straights and flushes count against, no wilds"
+    }
+    fn eval(&self, hand: &HandCards) -> Option<HandValue> {
+        no_wild(hand, 5..=7).map(eval_low27)
+    }
+    fn oracle(&self, hand: &HandCards) -> Option<HandValue> {
+        no_wild(hand, 5..=7).map(|c| brute5(c, eval_low27))
+    }
+}
+
+/// Badugi (four cards, distinct ranks and suits, ace low). No wilds.
+pub struct Badugi;
+
+impl Evaluator for Badugi {
+    fn id(&self) -> &'static str {
+        "badugi"
+    }
+    fn description(&self) -> &'static str {
+        "Badugi: best set of distinct ranks and suits, ace low"
+    }
+    fn eval(&self, hand: &HandCards) -> Option<HandValue> {
+        no_wild(hand, 1..=7).map(eval_badugi)
+    }
+    fn oracle(&self, hand: &HandCards) -> Option<HandValue> {
+        // Best over every 4-card (or smaller) subset, each scored on its own.
+        no_wild(hand, 1..=7).map(|c| {
+            let list = cards(c);
+            let mut best = HandValue(0);
+            for k in 1..=list.len().min(4) {
+                crate::eval::registry::each_subset(&list, k, &mut |s| {
+                    best = best.max(eval_badugi(s));
+                });
+            }
+            best
+        })
+    }
+}
+
+/// Every `k`-subset of `list` (small k, tests only).
+pub(crate) fn each_subset(list: &[Card], k: usize, f: &mut dyn FnMut(CardSet)) {
+    fn go(list: &[Card], k: usize, i: usize, acc: CardSet, f: &mut dyn FnMut(CardSet)) {
+        if acc.len() == k {
+            f(acc);
+        } else if i < list.len() {
+            let mut with = acc;
+            with.insert(list[i]);
+            go(list, k, i + 1, with, f);
+            go(list, k, i + 1, acc, f);
+        }
+    }
+    go(list, k, 0, CardSet::EMPTY, f);
+}
+
+/// 6+ Hold'em high (flush beats full house). No wilds.
+pub struct ShortDeck;
+
+impl Evaluator for ShortDeck {
+    fn id(&self) -> &'static str {
+        "short_deck"
+    }
+    fn description(&self) -> &'static str {
+        "6+ (short deck) high: flush beats full house, A-6-7-8-9 is the lowest straight"
+    }
+    fn eval(&self, hand: &HandCards) -> Option<HandValue> {
+        no_wild(hand, 5..=7).map(eval_short_deck)
+    }
+    fn oracle(&self, hand: &HandCards) -> Option<HandValue> {
+        no_wild(hand, 5..=7).map(|c| brute5(c, eval_short_deck))
+    }
+}
+
 /// Every registered evaluator.
-pub static EVALUATORS: &[&dyn Evaluator] = &[&High, &LowA6];
+pub static EVALUATORS: &[&dyn Evaluator] = &[&High, &LowA6, &Low27, &Badugi, &ShortDeck];
 
 /// Look an evaluator up by its [`Evaluator::id`].
 pub fn evaluator(id: &str) -> Option<&'static dyn Evaluator> {
@@ -186,7 +283,8 @@ mod tests {
             .iter()
             .map(|c| c.parse::<Card>().unwrap())
             .collect();
-        for e in EVALUATORS {
+        // Badugi is a four-card game; every other ranking needs five.
+        for e in EVALUATORS.iter().filter(|e| e.id() != "badugi") {
             assert_eq!(
                 e.eval(&HandCards::new(four, CardSet::EMPTY)),
                 None,

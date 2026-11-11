@@ -19,6 +19,7 @@
 //!   **different** ranks, so a wild can't make a "double-ace flush". It takes the highest rank
 //!   missing from the flush instead.
 
+pub mod extra;
 pub mod high;
 pub mod low_a6;
 pub mod oracle;
@@ -29,6 +30,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+pub use extra::{eval_badugi, eval_low27, eval_short_deck, short_deck, short_deck_category};
 pub use high::{eval_high, eval_high_wild};
 pub use low_a6::{eval_low_a6, eval_low_a6_wild};
 pub use partial_board::eval_partial_board;
