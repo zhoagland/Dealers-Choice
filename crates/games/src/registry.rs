@@ -72,6 +72,7 @@ pub const GAME_IDS: &[&str] = &[
     "seven_27",
     "five_21",
     "numbers",
+    "booray",
 ];
 
 /// Build game `id` from `config` (a TOML table of that game's `Config`; `None` = defaults)

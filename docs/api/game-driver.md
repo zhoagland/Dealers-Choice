@@ -183,8 +183,10 @@ Required tests, generic and provided by `engine::testing` (§6):
   observation must change at least once. If it never does, *r*'s private cards are effectively fixed
   by *q*'s observation, i.e. leaked (or `determinize` ignores the sampler). It's a statistical
   check that catches gross leaks; subtle ones (e.g. leaking one bit of a card) still need
-  game-specific tests. Also: legal actions and `to_act` must be identical across determinizations,
-  because legality that depends on hidden cards is itself a leak.
+  game-specific tests. Also: `to_act` must be identical across determinizations, and legal actions
+  must be a function of the *actor's* observation (identical whenever the actor's observation is):
+  a menu may depend on the actor's own cards (follow suit in Booray) but never on cards the actor
+  can't see. ISMCTS keys its nodes by the actor's observation, which is exactly this requirement.
 - **Perfect recall (C5):** along one hand, a seat's observations at its own decision points
   are all distinct. Necessary, not sufficient; the stronger property ("the history can be recovered
   from the observation") is enforced by the convention that observations carry the full public

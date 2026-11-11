@@ -907,3 +907,59 @@ fn numbers_throws_neighbours_and_gin_scoops() {
     // s1 scoops the $2 dealer ante (posted by s0, the chooser).
     assert_eq!(g.payoffs(&s), vec![Chips(-200), Chips(200)]);
 }
+
+#[test]
+fn booray_follow_suit_trump_and_scoring() {
+    let g = game("booray");
+    // 2 seats, button s0 = dealer. Deal order s1, s0 for 4 down each, then the dealer's card up.
+    // s1: 2c 3c 4c 5c (+ 6c) ; s0: Ah Kh Qh 2d (+ Jh up -> hearts are trump).
+    let mut s = carry_hand(
+        &g,
+        &ScriptCarry::default(),
+        &["2c", "Ah", "3c", "Kh", "4c", "Qh", "5c", "2d", "6c", "Jh"],
+    );
+    assert_eq!(s.trump, Some(engine::Suit::Hearts));
+    g.apply(&mut s, Action::InOut(1));
+    g.apply(&mut s, Action::InOut(1));
+    g.apply(&mut s, Action::Draw(0));
+    g.apply(&mut s, Action::Draw(0));
+    // The dealer (s0) leads and may not lead trump before it's played: only 2d.
+    let mut legal = Vec::new();
+    g.legal_actions(&s, &mut legal);
+    assert_eq!(legal, vec![Action::PlayCard(card("2d"))]);
+    g.apply(&mut s, Action::PlayCard(card("2d")));
+    // s1 has no diamonds: any card.
+    g.legal_actions(&s, &mut legal);
+    assert_eq!(legal.len(), 5);
+    g.apply(&mut s, Action::PlayCard(card("6c")));
+    // s0 won (the only diamond); s0 leads again, now any card (still no trump played: hearts
+    // only left, so trump may be led).
+    assert_eq!(s.tricks_won, vec![1, 0]);
+    for _ in 0..4 {
+        g.legal_actions(&s, &mut legal);
+        g.apply(&mut s, legal[0]);
+        g.legal_actions(&s, &mut legal);
+        g.apply(&mut s, legal[0]);
+    }
+    assert_eq!(s.tricks_won, vec![5, 0]);
+    let c = g.carry_out(&s);
+    // s0 scooped but s1 fried: the game goes on with s1's stun in the pot.
+    assert!(!c.over);
+    assert!(c.pot > 0);
+}
+
+#[test]
+fn booray_lone_player_scoops() {
+    let g = game("booray");
+    let mut s = carry_hand(
+        &g,
+        &ScriptCarry::default(),
+        &["2c", "Ah", "3c", "Kh", "4c", "Qh", "5c", "2d", "6c", "Jh"],
+    );
+    g.apply(&mut s, Action::InOut(1));
+    g.apply(&mut s, Action::InOut(0));
+    let c = g.carry_out(&s);
+    assert!(c.over);
+    // Pot: $2 dealer ante (s0) + $1 + $1 antes = $4 to s1.
+    assert_eq!(g.payoffs(&s), vec![Chips(-300), Chips(300)]);
+}

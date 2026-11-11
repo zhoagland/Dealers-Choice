@@ -76,6 +76,8 @@ pub const SCRIPTED_IDS: &[&str] = &[
     "seven_27",
     "five_21",
     "numbers",
+    // G10 Trick-taking
+    "booray",
 ];
 
 /// The script for `id`.
@@ -199,6 +201,7 @@ pub fn script(id: &str) -> Option<Script> {
             ["5.5", "21.5", "Both"],
         ),
         "numbers" => numbers(),
+        "booray" => booray(),
         _ => return None,
     })
 }
@@ -1629,5 +1632,49 @@ fn numbers() -> Script {
             },
         ],
         ..base("numbers", "Numbers (hi/lo declare)", "Poker Bible §Numbers")
+    }
+}
+
+// ----- G10 Trick-taking -----------------------------------------------------------------------
+
+/// Whooh Ray for Booray: 5 cards (the dealer's last one face up: its suit is trump); In or Out;
+/// one draw; then 5 tricks led by the dealer (follow suit; highest trump, else highest of the led
+/// suit, ace high, wins). 3 tricks scoop the pot; a player who played and took no trick "fries"
+/// (a stun); every other player who played pays $1. The game repeats (button moving) until someone
+/// scoops and nobody fries.
+/// - **D-BOO-1** without a scoop the pot carries and grows by the stuns and $1 payments.
+/// - **D-BOO-2** trump can't be led until one has been played (unless a player holds only trumps).
+/// - **D-BOO-3** everyone antes $1 on the first hand; when the game ends, the $1 payments are not
+///   made (the pot isn't played again).
+/// - **D-BOO-4** the draw allows up to 4 of the face-down cards (the trump card stays).
+/// - **D-BOO-5** if only one player is In, they take every trick (scoop).
+/// - Variation `out_is_out` (the Bible's).
+fn booray() -> Script {
+    Script {
+        steps: vec![
+            Down(4),
+            DealerUp,
+            InOut { price: Chips::ZERO },
+            Draw {
+                max: 4,
+                ace_bonus: false,
+            },
+            Tricks { n: 5 },
+        ],
+        ante_each: Chips(100),
+        ante_first_hand_only: true,
+        max_seats: 7,
+        boards: 0,
+        length: GameLength::UntilDone { max_hands: 30 },
+        resolution: Resolution::Booray,
+        variants: vec![Variant {
+            name: "out_is_out",
+            apply: |s| s.out_is_out = true,
+        }],
+        ..base(
+            "booray",
+            "Whooh Ray for Booray",
+            "Poker Bible §Whooh Ray for Booray",
+        )
     }
 }

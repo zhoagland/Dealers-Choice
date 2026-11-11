@@ -422,17 +422,24 @@ fn check_determinize<G: Game>(
                 obs_q,
                 "C6 (determinize round-trip) {ctx}: observe(determinize(obs), {q}) != obs"
             );
-            // Who acts and what they may do is public: a determinization can't change it.
+            // Who acts is public: a determinization can't change it.
             assert_eq!(
                 game.to_act(&s2),
                 game.to_act(state),
                 "C6 {ctx}: to_act changed"
             );
-            game.legal_actions(&s2, &mut legal2);
-            assert_eq!(
-                legal2, legal,
-                "C6 {ctx}: legal actions depend on hidden information"
-            );
+            // What the actor may do may depend on its own cards (follow suit), but only on what
+            // the actor knows: equal actor observations must give equal menus (ISMCTS keys its
+            // nodes by the actor's observation).
+            if let ToAct::Seat(actor) = game.to_act(state)
+                && game.observe(&s2, actor) == game.observe(state, actor)
+            {
+                game.legal_actions(&s2, &mut legal2);
+                assert_eq!(
+                    legal2, legal,
+                    "C6 {ctx}: legal actions depend on information the actor doesn't have"
+                );
+            }
             for r in (0..n).map(Seat) {
                 if r != q && game.observe(&s2, r) != game.observe(state, r) {
                     varied[q.index()][r.index()] = true;
