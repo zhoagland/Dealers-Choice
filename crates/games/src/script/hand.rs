@@ -29,6 +29,64 @@ pub enum Ranking {
     SpadeLow,
     /// Indian Poker: the single highest card (ace high; same rank ties).
     HighCard,
+    /// 3-card hands (3-2-1 Drop, 3-5-7's first round): trips > pair > high card; straights and
+    /// flushes don't count; wilds allowed.
+    ThreeCard,
+    /// Numbers: the highest card total (2-10 face value, pictures ½, aces 11).
+    NumbersHigh,
+    /// Numbers: the lowest card total (aces 1).
+    NumbersLow,
+}
+
+/// Blackjack-style card value in half points: 2-10 face value, pictures ½, aces 1 or 11.
+pub fn number_value(c: Card, ace_high: bool) -> u32 {
+    match c.rank() {
+        Rank::Ace => {
+            if ace_high {
+                22
+            } else {
+                2
+            }
+        }
+        Rank::Jack | Rank::Queen | Rank::King => 1,
+        r => 2 * (r as u32 + 2),
+    }
+}
+
+/// 3-card value (no straights or flushes): trips > pair > high card, highest ranks first; wild
+/// cards join the best group. Packed as `category << 20 | ranks` (bigger = better).
+fn three_card(own: &[Card], wild: CardSet) -> Option<HandValue> {
+    let mut counts = [0u8; 13];
+    let mut w = 0u8;
+    for &c in own {
+        if wild.contains(c) {
+            w += 1;
+        } else if !c.is_joker() {
+            counts[c.rank() as usize] += 1;
+        }
+    }
+    let naturals: Vec<u8> = (0..13u8)
+        .rev()
+        .flat_map(|r| std::iter::repeat_n(r, counts[r as usize] as usize))
+        .collect();
+    if naturals.is_empty() && w == 0 {
+        return None;
+    }
+    let best_with = |need: u8| (0..13u8).rev().find(|&r| counts[r as usize] + w >= need);
+    let (cat, ranks): (u32, Vec<u8>) = if let Some(r) = best_with(3).or((w >= 3).then_some(12)) {
+        (2, vec![r])
+    } else if let Some(r) = best_with(2).or((w >= 2).then_some(12)) {
+        // The pair uses r's naturals plus wilds; the kicker is the best other natural.
+        let kicker = naturals.iter().copied().find(|&k| k != r);
+        (1, std::iter::once(r).chain(kicker).collect())
+    } else {
+        (0, naturals)
+    };
+    let mut v = cat << 20;
+    for (i, r) in ranks.iter().take(5).enumerate() {
+        v |= (*r as u32) << (16 - 4 * i);
+    }
+    Some(HandValue(v))
 }
 
 /// Which cards make a hand.
@@ -88,9 +146,13 @@ fn five(r: Ranking, cards: CardSet, wild: CardSet) -> Option<HandValue> {
         Ranking::Low27 if w == 0 => eval_low27(nat),
         Ranking::ShortDeck if w == 0 => eval_short_deck(nat),
         Ranking::Low27 | Ranking::ShortDeck => return None, // never wild in any Bible game
-        Ranking::Badugi | Ranking::SpadeHigh | Ranking::SpadeLow | Ranking::HighCard => {
-            unreachable!()
-        }
+        Ranking::Badugi
+        | Ranking::SpadeHigh
+        | Ranking::SpadeLow
+        | Ranking::HighCard
+        | Ranking::ThreeCard
+        | Ranking::NumbersHigh
+        | Ranking::NumbersLow => unreachable!(),
     })
 }
 
@@ -162,6 +224,21 @@ pub fn share_value(
             .map(|c| c.rank() as u32 + 1)
             .max()
             .map(HandValue),
+        Ranking::ThreeCard => three_card(own, wild),
+        Ranking::NumbersHigh => Some(HandValue(
+            own.iter()
+                .filter(|c| !c.is_joker())
+                .map(|&c| number_value(c, true))
+                .sum(),
+        )),
+        Ranking::NumbersLow => Some(HandValue(
+            10_000
+                - own
+                    .iter()
+                    .filter(|c| !c.is_joker())
+                    .map(|&c| number_value(c, false))
+                    .sum::<u32>(),
+        )),
         Ranking::Badugi => {
             let set: CardSet = own.iter().copied().filter(|c| !c.is_joker()).collect();
             Some(eval_badugi(set))
@@ -284,5 +361,29 @@ mod tests {
         let board = cards("Kh Kc 4s");
         let v = share_value(&any, &own, &board, CardSet::EMPTY).unwrap();
         assert_eq!(v.category(), engine::Category::Quads);
+    }
+}
+
+#[cfg(test)]
+mod three_card_tests {
+    use super::*;
+
+    fn v(s: &str, wild: &[&str]) -> HandValue {
+        let own: Vec<Card> = s.split_whitespace().map(|c| c.parse().unwrap()).collect();
+        let w: CardSet = wild.iter().map(|c| c.parse::<Card>().unwrap()).collect();
+        three_card(&own, w).unwrap()
+    }
+
+    #[test]
+    fn three_card_order() {
+        assert!(v("2c 2d 2h", &[]) > v("Ac Ad Kh", &[]), "trips beat pairs");
+        assert!(v("Ac Ad 2h", &[]) > v("Kc Kd Qh", &[]));
+        assert!(v("Kc Kd Qh", &[]) > v("Kh Ks Jh", &[]), "kicker");
+        assert!(v("Ac 2d 3h", &[]) > v("Kc Qd Jh", &[]), "high card");
+        // No straights or flushes: Q-J-T suited is just queen high.
+        assert!(v("Ac 2d 4h", &[]) > v("Qh Jh Th", &[]));
+        // Red kings wild (3-2-1 Drop): Kd + a pair of 5s = trip 5s; Kh + A = pair of aces.
+        assert_eq!(v("Kd 5c 5h", &["Kd", "Kh"]), v("5s 5c 5h", &[]));
+        assert!(v("Kh Ac 7d", &["Kd", "Kh"]) > v("Ks Kc 7d", &[]));
     }
 }

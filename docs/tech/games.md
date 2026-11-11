@@ -153,7 +153,12 @@ show down". A game is a `Script` in `script/games.rs`: its steps (`Down`, `Up`, 
 Pots go through `engine::pot::award_shares`; declarations map to `Claim`s. Determinization replays
 the public events with sampled hidden cards (draws included). D-DRAW-1: when the stock runs out the
 discards are reshuffled (a public event); determinization then links each recycled deal to a card
-thrown away before it. Variations are named `Variant`s switched on with `variants = ["…"]`. Every game id is in
+thrown away before it. Variations are named `Variant`s switched on with `variants = ["…"]`.
+
+Multi-hand games (G8) use `GameLength::UntilDone` with `ScriptCarry` (carried pot, legs, strikes, seats
+out, Tempest's ante level). A `Resolution` mode settles each hand: `Legs`, `Drop`, `Strikes`,
+`Declarer` or `Tempest`. Stuns use `engine::pot::stun_amounts` with `Config::stun_step` (OQ-9). Carried
+pots are not split into side pots. Every game id is in
 `script::games::SCRIPTED_IDS` and the registry.
 
 Shared rules: D-ALL-1 money (chooser's $2 dealer ante, spread 50¢–$2, 4 bets/street; `structure =
@@ -202,6 +207,11 @@ showdown, burns not modelled. **D-HE-1** Hold'em variants play best five of hole
 | `push` | Push | stud; push an up card on for $1, receiver keeps or replaces for $1 | hi/lo declare | D-PU-1/2, `buy_eighth` |
 | `bullet` | Bullet | jokers; 2 down, then take-a-card rounds to 5 | face-down jokers wild, face-up joker kills, hi/lo | D-BU-1/2/3 |
 | `bid` | Bid | 2 down; 5 rounds of middle cards picked in sealed-bid order | hi/lo declare | D-BID-1, `buy_eighth` |
+| `guts_leg` | Guts Leg | 5 Card Draw (3, or 4 with an Ace) repeated; carried pot | high; 2 legs take the pot | D-GL-1/2/3, `out_is_out` |
+| `drop_321` | 3-2-1 Drop | 3 cards, red kings wild, hold or drop; lone player vs the dummy | 3-card high; stuns | D-DROP-1..4 |
+| `three_five_seven` | 3-5-7 | cycles of 3/5/7 cards (3s/5s/7s wild), play or drop each round | strikes and stuns; 3 strikes take the pot | D-357-1 (owner), D-357-2/3 |
+| `scare_a_moosh` | Scare-a-moosh | name the game and price; In/Out; draw; bet | named: high, low, high/low numbers | D-SAM-1..4, `stay_in` |
+| `holdem_tempest` | Tempest Hold'em | rising antes, $2 Giant Blind, all-in or fold, $20 cap; until a showdown | high | D-TEM-1 (owner) |
 
 ## Open questions
 - ~~G-1~~ Resolved: FTQ max 7 seats.

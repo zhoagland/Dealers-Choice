@@ -12,7 +12,8 @@
 use engine::{CardSet, Chips};
 
 use super::hand::{Build, Ranking, ShareRule};
-use super::{ActOrder, DeckKind, DeclareKind, Script, Step, Variant, Visibility};
+use super::{ActOrder, DeckKind, DeclareKind, Resolution, Script, Step, Variant, Visibility};
+use engine::GameLength;
 use engine::view::BoardLayout;
 
 use Step::*;
@@ -65,6 +66,12 @@ pub const SCRIPTED_IDS: &[&str] = &[
     "push",
     "bullet",
     "bid",
+    // G8 Multi-hand & stuns
+    "guts_leg",
+    "drop_321",
+    "three_five_seven",
+    "scare_a_moosh",
+    "holdem_tempest",
 ];
 
 /// The script for `id`.
@@ -166,6 +173,11 @@ pub fn script(id: &str) -> Option<Script> {
         "push" => push(),
         "bullet" => bullet(),
         "bid" => bid(),
+        "guts_leg" => guts_leg(),
+        "drop_321" => drop_321(),
+        "three_five_seven" => three_five_seven(),
+        "scare_a_moosh" => scare_a_moosh(),
+        "holdem_tempest" => tempest(),
         _ => return None,
     })
 }
@@ -231,6 +243,10 @@ fn base(id: &'static str, name: &'static str, rules_ref: &'static str) -> Script
         up_joker_kills: false,
         low_hole_wild: false,
         hand_cards: 0,
+        length: GameLength::SingleHand,
+        resolution: Resolution::Normal,
+        ante_first_hand_only: false,
+        out_is_out: false,
     }
 }
 
@@ -1332,5 +1348,169 @@ fn bid() -> Script {
             apply: buy_eighth,
         }],
         ..base("bid", "Bid (hi/lo declare)", "Poker Bible §Bid")
+    }
+}
+
+// ----- G8 Multi-hand & stuns ------------------------------------------------------------------
+//
+// These games last several hands (`UntilDone`): the pot (and legs, strikes, who is out) carry
+// from hand to hand; the button moves each hand. Stuns follow OQ-9 (the pot, capped at $10, +$N
+// per further stunned player in the hand; N = `Config::stun_step`). At the hand cap the carried
+// pot is split evenly (D-G0-1). Side pots are not formed in carried pots: whoever wins the pot
+// takes all of it.
+
+/// Guts Leg: 5 Card Draw (draw up to 3, or 4 keeping a shown Ace) repeated; the hand winner earns
+/// a leg; the first to 2 legs takes the whole pot. If every player in the game has a leg, the
+/// counts reset.
+/// - **D-GL-1** the pot carries over and each hand's betting adds to it.
+/// - **D-GL-2** a hand won by everyone else folding still earns a leg.
+/// - **D-GL-3** tied winners each earn a leg; tied finishers split the pot.
+/// - Ace bonus as D-3BM-1. Variation `out_is_out` (the Bible's).
+fn guts_leg() -> Script {
+    Script {
+        steps: vec![
+            Down(5),
+            Bet,
+            Draw {
+                max: 3,
+                ace_bonus: true,
+            },
+            Bet,
+        ],
+        max_seats: 7,
+        shares: vec![HIGH_OWN],
+        boards: 0,
+        length: GameLength::UntilDone { max_hands: 30 },
+        resolution: Resolution::Legs { need: 2 },
+        variants: vec![Variant {
+            name: "out_is_out",
+            apply: |s| s.out_is_out = true,
+        }],
+        ..base("guts_leg", "Guts Leg", "Poker Bible §Guts Leg")
+    }
+}
+
+/// 3-2-1 Drop: 3-card hands (no straights or flushes), red kings wild; everyone holds or drops at
+/// once. A lone player plays the pot's dummy hand: beating it takes the pot (and ends the game);
+/// otherwise they are stunned. With 2+ players in, the best hand takes the pot and every other
+/// player who stayed in is stunned into the next hand's pot.
+/// - **D-DROP-1/2** as above; stun per OQ-9.
+/// - **D-DROP-3** the game ends when a hand leaves the pot empty.
+/// - **D-DROP-4** $1 ante from everyone on the first hand only; the dummy hand is dealt only when
+///   it's needed (nobody sees it otherwise, so this changes nothing).
+fn drop_321() -> Script {
+    let mut red_kings = CardSet::EMPTY;
+    red_kings.insert("Kd".parse().unwrap());
+    red_kings.insert("Kh".parse().unwrap());
+    Script {
+        steps: vec![Down(3), InOut { price: Chips::ZERO }, DummyIfLone { n: 3 }],
+        ante_each: Chips(100),
+        ante_first_hand_only: true,
+        max_seats: 9,
+        shares: vec![ShareRule {
+            name: "High",
+            ranking: Ranking::ThreeCard,
+            build: Build::Own,
+            board: 0,
+        }],
+        wild: red_kings,
+        length: GameLength::UntilDone { max_hands: 30 },
+        resolution: Resolution::Drop,
+        ..base("drop_321", "3-2-1 Drop", "Poker Bible §3-2-1 Drop")
+    }
+}
+
+/// 3-5-7: one hand = one 3-5-7 cycle. Everyone antes $1 (D-357-1, owner), gets 3 cards (3s wild,
+/// 3-card ranking), and secretly plays or drops; then 2 more (5 cards, 5s wild), play or drop;
+/// then 2 more (best 5 of 7, 7s wild), play or drop. A lone player gets a strike; with 2+ playing,
+/// the losers are stunned into the pot. 3 strikes takes the pot and ends the game.
+/// - **D-357-2** hands that play a round are shown to the table.
+/// - **D-357-3** dropping a round doesn't leave the cycle.
+fn three_five_seven() -> Script {
+    use engine::Rank;
+    Script {
+        steps: vec![
+            Down(3),
+            PlayRound {
+                wild: Rank::Three,
+                three: true,
+            },
+            Down(2),
+            PlayRound {
+                wild: Rank::Five,
+                three: false,
+            },
+            Down(2),
+            PlayRound {
+                wild: Rank::Seven,
+                three: false,
+            },
+        ],
+        ante_each: Chips(100),
+        max_seats: 7,
+        shares: vec![HIGH_OWN],
+        boards: 0,
+        length: GameLength::UntilDone { max_hands: 40 },
+        resolution: Resolution::Strikes { need: 3 },
+        ..base("three_five_seven", "3-5-7", "Poker Bible §3-5-7")
+    }
+}
+
+/// Scare-a-moosh: 5 cards; from the dealer's left each player may name the game (high poker, low
+/// poker, high numbers, low numbers) and a price up to $2, or pass it on. Then In/Out (the
+/// declarer is in; In pays the price), one draw, one betting round, showdown. The declarer must
+/// win outright or is stunned; the pot carries until the declarer wins. Out is out for the rest
+/// of the game.
+/// - **D-SAM-1** everyone who's in pays the price into the pot.
+/// - **D-SAM-2** if all pass, redeal (counts toward the hand cap).
+/// - **D-SAM-3** the draw allows up to 5 cards (as 5 Card Draw).
+/// - **D-SAM-4** "numbers" are blackjack values (2-10, pictures ½, aces 1 or 11): high numbers
+///   = highest total, low numbers = lowest.
+/// - Variation `stay_in` (the Bible's "No, if you're out you're out"): Out only for the hand.
+fn scare_a_moosh() -> Script {
+    Script {
+        steps: vec![
+            Down(5),
+            NameGame { max_units: 4 },
+            InOut { price: Chips::ZERO },
+            Draw {
+                max: 5,
+                ace_bonus: false,
+            },
+            Bet,
+        ],
+        max_seats: 7,
+        shares: vec![HIGH_OWN],
+        boards: 0,
+        length: GameLength::UntilDone { max_hands: 30 },
+        resolution: Resolution::Declarer,
+        out_is_out: true,
+        variants: vec![Variant {
+            name: "stay_in",
+            apply: |s| s.out_is_out = false,
+        }],
+        ..base(
+            "scare_a_moosh",
+            "Scare-a-moosh",
+            "Poker Bible §Scare-a-moosh",
+        )
+    }
+}
+
+/// Tempest Hold'em: Hold'em where everyone antes, the seat left of the dealer posts a $2 Giant
+/// Blind, and the only options are all-in or fold, capped at 10 Giant Blinds ($20) per player per
+/// hand. Hands repeat (button moving) until one reaches showdown.
+/// - **D-TEM-1 (owner)** ante starts at 50¢ and rises 50¢ each hand until a hand reaches
+///   showdown, which ends the game.
+fn tempest() -> Script {
+    Script {
+        steps: holdem_steps(),
+        length: GameLength::UntilDone { max_hands: 30 },
+        resolution: Resolution::Tempest,
+        ..base(
+            "holdem_tempest",
+            "Tempest Hold'em",
+            "Poker Bible §Tempest Hold'em",
+        )
     }
 }

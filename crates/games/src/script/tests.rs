@@ -629,7 +629,11 @@ fn baseball_face_up_four_earns_an_extra_card() {
     let mut s = stud_open(&g, ["Ac", "Kc", "Ad", "Kd"]);
     g.apply(&mut s, Action::Deal(card("4h"))); // s1's up card: a 4
     g.apply(&mut s, Action::Deal(card("9s"))); // s0's up card
-    assert_eq!(g.to_act(&s), ToAct::Seat(Seat(1)), "s1 chooses up or down for the extra");
+    assert_eq!(
+        g.to_act(&s),
+        ToAct::Seat(Seat(1)),
+        "s1 chooses up or down for the extra"
+    );
     g.apply(&mut s, Action::Choose(1));
     g.apply(&mut s, Action::Deal(card("2c")));
     assert_eq!(s.up[1].as_slice(), &[card("4h"), card("2c")]);
@@ -654,7 +658,11 @@ fn push_moves_the_card_and_the_pusher_gets_a_fresh_one() {
     g.apply(&mut s, Action::Deal(card("2h"))); // s1's street card
     g.apply(&mut s, Action::Choose(1)); // push it ($1)
     g.apply(&mut s, Action::Deal(card("9s"))); // s1's fresh card
-    assert_eq!(g.to_act(&s), ToAct::Seat(Seat(0)), "s0 decides on the pushed 2h");
+    assert_eq!(
+        g.to_act(&s),
+        ToAct::Seat(Seat(0)),
+        "s0 decides on the pushed 2h"
+    );
     g.apply(&mut s, Action::Choose(0)); // keep it
     assert_eq!(s.up[1].as_slice(), &[card("9s")]);
     assert_eq!(s.up[0].as_slice(), &[card("2h")]);
@@ -680,12 +688,164 @@ fn bid_highest_bid_picks_first() {
     g.apply(&mut s, Action::Deal(card("Ah")));
     // s1 bids $1, s0 bids $3 (hidden until both are in).
     g.apply(&mut s, Action::Bid(2));
-    assert!(!g.observe(&s, Seat(0)).history.iter().any(|e| matches!(e, Event::BidShown(..))));
+    assert!(
+        !g.observe(&s, Seat(0))
+            .history
+            .iter()
+            .any(|e| matches!(e, Event::BidShown(..)))
+    );
     g.apply(&mut s, Action::Bid(6));
-    assert_eq!(g.to_act(&s), ToAct::Seat(Seat(0)), "s0 bid more and picks first");
+    assert_eq!(
+        g.to_act(&s),
+        ToAct::Seat(Seat(0)),
+        "s0 bid more and picks first"
+    );
     g.apply(&mut s, Action::Choose(1)); // the Ah
     g.apply(&mut s, Action::Choose(0));
     assert_eq!(s.up[0].as_slice(), &[card("Ah")]);
     assert_eq!(s.up[1].as_slice(), &[card("2h")]);
-    assert_eq!(s.betting.contributed()[0], Chips(200 + 300), "dealer ante + $3 bid");
+    assert_eq!(
+        s.betting.contributed()[0],
+        Chips(200 + 300),
+        "dealer ante + $3 bid"
+    );
+}
+
+/// Start hand `carry.hands` of a 2-seat multi-hand game, dealing `cards` (button alternates).
+fn carry_hand(g: &Scripted, carry: &ScriptCarry, cards: &[&str]) -> State {
+    let mut setup = HandSetup::simple(2, Chips(10_000));
+    setup.button = Seat((carry.hands % 2) as u8);
+    setup.first_hand_of_game = carry.hands == 0;
+    let mut s = g.new_hand_with(&setup, carry);
+    for c in cards {
+        assert_eq!(g.to_act(&s), ToAct::Chance);
+        g.apply(&mut s, Action::Deal(card(c)));
+    }
+    s
+}
+
+#[test]
+fn guts_leg_two_legs_take_the_carried_pot() {
+    let g = game("guts_leg");
+    // Hand 1 (button s0, deal order s1, s0): s0 has aces, s1 nothing; both check and stand pat.
+    let h1 = ["2c", "Ac", "7d", "Ad", "9h", "Ah", "Js", "Kc", "4d", "Kd"];
+    let mut s = carry_hand(&g, &ScriptCarry::default(), &h1);
+    for a in [
+        Action::CheckCall,
+        Action::CheckCall,
+        Action::Draw(0),
+        Action::Draw(0),
+        Action::CheckCall,
+        Action::CheckCall,
+    ] {
+        g.apply(&mut s, a);
+    }
+    let c1 = g.carry_out(&s);
+    assert_eq!(c1.legs, vec![1, 0]);
+    assert_eq!(c1.pot, 200, "the dealer ante carries");
+    assert!(!c1.over);
+    assert_eq!(g.payoffs(&s), vec![Chips(-200), Chips::ZERO]);
+    // Hand 2 (button s1, deal order s0, s1): s0 wins again -> 2 legs, takes the pot.
+    let h2 = ["Ac", "2c", "Ad", "7d", "Ah", "9h", "Kc", "Js", "Kd", "4d"];
+    let mut s = carry_hand(&g, &c1, &h2);
+    for a in [
+        Action::CheckCall,
+        Action::CheckCall,
+        Action::Draw(0),
+        Action::Draw(0),
+        Action::CheckCall,
+        Action::CheckCall,
+    ] {
+        g.apply(&mut s, a);
+    }
+    let c2 = g.carry_out(&s);
+    assert!(c2.over);
+    assert_eq!(
+        g.payoffs(&s),
+        vec![Chips(200), Chips::ZERO],
+        "s0 gets the carried ante back"
+    );
+}
+
+#[test]
+fn drop_lone_player_plays_the_dummy() {
+    let g = game("drop_321");
+    // s1: trip 2s; s0: junk. s1 plays alone; dummy is A-K-Q high: s1 wins the antes.
+    let mut s = carry_hand(
+        &g,
+        &ScriptCarry::default(),
+        &["2c", "3d", "2d", "7h", "2h", "9s"],
+    );
+    g.apply(&mut s, Action::InOut(1)); // s1 holds
+    g.apply(&mut s, Action::InOut(0)); // s0 drops
+    for c in ["Ac", "Ks", "Qd"] {
+        g.apply(&mut s, Action::Deal(card(c)));
+    }
+    let c = g.carry_out(&s);
+    assert!(c.over);
+    // Pot: $2 dealer ante (s0, the chooser) + $1 + $1 antes = $4 to s1.
+    assert_eq!(g.payoffs(&s), vec![Chips(-300), Chips(300)]);
+}
+
+#[test]
+fn three_five_seven_lone_player_gets_a_strike() {
+    let g = game("three_five_seven");
+    let mut s = carry_hand(
+        &g,
+        &ScriptCarry::default(),
+        &["2c", "3d", "2d", "7h", "2h", "9s"],
+    );
+    g.apply(&mut s, Action::Play(1)); // s1 plays
+    g.apply(&mut s, Action::Play(0)); // s0 drops
+    assert_eq!(s.strikes, vec![0, 1]);
+}
+
+#[test]
+fn scare_a_moosh_declarer_who_loses_is_stunned() {
+    let g = game("scare_a_moosh");
+    // s1 names high poker at $1 with junk; s0 has aces and is in.
+    let deal = ["2c", "Ac", "7d", "Ad", "9h", "Ah", "Js", "Kc", "4d", "Kd"];
+    let mut s = carry_hand(&g, &ScriptCarry::default(), &deal);
+    g.apply(&mut s, Action::Name(1 + 0 * 4 + 1)); // s1: high poker, $1
+    g.apply(&mut s, Action::InOut(1)); // s1 (declarer) in
+    g.apply(&mut s, Action::InOut(1)); // s0 in
+    g.apply(&mut s, Action::Draw(0));
+    g.apply(&mut s, Action::Draw(0));
+    g.apply(&mut s, Action::CheckCall);
+    g.apply(&mut s, Action::CheckCall);
+    let c = g.carry_out(&s);
+    assert!(!c.over, "the declarer didn't win: the pot carries");
+    // Pot $2 + $1 + $1 = $4; s1's stun = $4 (under the $10 cap).
+    assert_eq!(c.pot, 400 + 400);
+    assert_eq!(g.payoffs(&s), vec![Chips(-300), Chips(-500)]);
+}
+
+#[test]
+fn tempest_ante_rises_until_a_showdown_and_only_shoves_or_folds() {
+    let g = game("holdem_tempest");
+    let mut s = carry_hand(&g, &ScriptCarry::default(), &["2c", "3d", "7h", "8s"]);
+    // Ante 50¢ each + $2 Giant Blind from s1 (left of the button). s0 acts first.
+    let mut legal = Vec::new();
+    g.legal_actions(&s, &mut legal);
+    assert!(
+        legal
+            .iter()
+            .all(|a| matches!(a, Action::Fold | Action::RaiseTo(_) | Action::CheckCall))
+    );
+    assert!(
+        legal
+            .iter()
+            .any(|a| matches!(a, Action::RaiseTo(x) if *x == Chips(2000) - Chips(50))),
+        "{legal:?} stacks {:?}",
+        s.betting.stacks()
+    );
+    g.apply(&mut s, Action::Fold);
+    let c = g.carry_out(&s);
+    assert_eq!(c.level, 1, "no showdown: the ante goes up");
+    assert!(!c.over);
+    let s2 = carry_hand(&g, &c, &["2c", "3d", "7h", "8s"]);
+    assert_eq!(
+        s2.betting.contributed()[0] + s2.betting.contributed()[1],
+        Chips(100 + 100 + 200)
+    );
 }

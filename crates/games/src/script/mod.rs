@@ -22,8 +22,10 @@ use smallvec::SmallVec;
 use engine::betting::{BetAction, BetSize, Betting, Structure};
 use engine::eval::{eval_partial_board, short_deck};
 use engine::game::sample_hidden_hands;
-use engine::pot::{Claim, Share, award_shares, build_pots, order_from_button};
-use engine::replay::replay_interleaved;
+use engine::pot::{
+    Claim, Share, StunRule, award_shares, build_pots, order_from_button, split, stun_amounts,
+};
+use engine::replay::replay_interleaved_with;
 use engine::view::{BoardLayout, BoardView, CardSlot, PotView, SeatStatus, SeatView, TableView};
 use engine::{
     ActionClass, Card, CardSet, Chips, DetRng, Game, GameLength, GameMeta, HandSetup, HandValue,
@@ -108,6 +110,15 @@ pub enum Step {
     BidRound { max_units: u8 },
     /// Each seat still in may buy one more card: face up for `up`, face down for `down`.
     BuyCard { up: Chips, down: Chips },
+    /// 3-5-7: everyone secretly plays or drops this round (dropping doesn't leave the hand);
+    /// `wild` is the wild rank; `three` = 3-card ranking. A lone player gets a strike; with
+    /// more, the losers are stunned (D-357-*).
+    PlayRound { wild: Rank, three: bool },
+    /// 3-2-1 Drop: if exactly one player is still in, deal the pot's dummy hand face up.
+    DummyIfLone { n: u8 },
+    /// Scare-a-moosh: from the dealer's left, each player may name the game and its price
+    /// (up to `max_units` × 50¢) or pass it on.
+    NameGame { max_units: u8 },
     /// Red River (D-RR-1..3): one board card then a betting round, repeated while the card just
     /// dealt is red (and cards remain).
     RedRiver { board: u8 },
@@ -197,6 +208,47 @@ pub struct Script {
     /// Cards each seat ends with (Push: replacements are only offered while the stock can
     /// still cover everyone's remaining cards).
     pub hand_cards: u8,
+    /// `SingleHand` or `UntilDone` (multi-hand games, G8).
+    pub length: GameLength,
+    /// How a hand's money is settled (and what carries to the next hand).
+    pub resolution: Resolution,
+    /// `ante_each` only on a game's first hand.
+    pub ante_first_hand_only: bool,
+    /// "If you're out you're out": seats that fold (or go Out) sit out the rest of the game.
+    pub out_is_out: bool,
+}
+
+/// How a hand ends and what carries over (catalog G8).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Resolution {
+    /// Ordinary pots.
+    Normal,
+    /// Guts Leg: the hand winner earns a leg; `need` legs takes the whole carried pot.
+    Legs { need: u8 },
+    /// 3-2-1 Drop: a lone player plays the dummy hand; with more, the best takes the pot and
+    /// the others are stunned.
+    Drop,
+    /// 3-5-7: strikes and stuns happen during the hand; `need` strikes takes the pot.
+    Strikes { need: u8 },
+    /// Scare-a-moosh: the declarer must win the named game or is stunned; the pot carries.
+    Declarer,
+    /// Tempest Hold'em: ordinary pots; the ante rises each hand until one reaches showdown.
+    Tempest,
+}
+
+/// What a multi-hand game carries from hand to hand. Public; `Default` = first hand.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ScriptCarry {
+    /// Chips carried in the pot (cents).
+    pub pot: i64,
+    pub legs: Vec<u8>,
+    pub strikes: Vec<u8>,
+    /// Seats out for the rest of the game.
+    pub out: u16,
+    pub hands: u32,
+    /// Tempest: hands since the last showdown.
+    pub level: u32,
+    pub over: bool,
 }
 
 /// A public decision a seat must make right now (Baseball's extra card, Push, Bullet, Bid…).
@@ -254,6 +306,9 @@ pub struct Config {
     pub high_only: bool,
     /// Named variations to switch on (see each game's `Script::variants`).
     pub variants: Vec<String>,
+    /// Stuns: how much higher each further stunned player's cap is, in a hand (OQ-9; the
+    /// chooser picks it). Default $0.
+    pub stun_step: Chips,
 }
 
 impl Default for Config {
@@ -270,6 +325,7 @@ impl Default for Config {
             bet_menu: vec![BetSize::MinRaise, BetSize::MaxRaise],
             high_only: false,
             variants: Vec::new(),
+            stun_step: Chips::ZERO,
         }
     }
 }
@@ -300,6 +356,11 @@ pub enum Action {
     Choose(u8),
     /// A sealed bid in 50¢ units (Bid).
     Bid(u8),
+    /// 3-5-7: 1 = play this round, 0 = drop (hidden until all have chosen).
+    Play(u8),
+    /// Scare-a-moosh: 0 = pass, else `1 + game * 4 + (units - 1)` (game 0 high, 1 low, 2 high
+    /// numbers, 3 low numbers; price `units` × 50¢).
+    Name(u8),
 }
 
 /// The `idx`-th permutation (lexicographic) of `0..k`.
@@ -466,6 +527,16 @@ pub struct State {
     pub middle: SmallVec<[Card; 9]>,
     bids: Vec<Option<u8>>,
     bid_phase: u8,
+    /// The carry this hand started from.
+    carry: ScriptCarry,
+    /// 3-5-7 strikes during the hand, and who reached the target.
+    strikes: Vec<u8>,
+    strike_winner: Option<Seat>,
+    plays: Vec<Option<u8>>,
+    /// Scare-a-moosh: (declarer, game, price units), or `None` while being named.
+    named: Option<(Seat, u8, u8)>,
+    /// Seats that went Out this hand.
+    outs: u16,
     pub betting: Betting,
     queue: VecDeque<Slot>,
     deal_log: Vec<Slot>,
@@ -613,8 +684,18 @@ impl Scripted {
                 }
             }
             Step::Bet => {
-                let first = self.first_to_act(s);
+                let mut first = self.first_to_act(s);
+                let giant = self.script.resolution == Resolution::Tempest && s.streets == 0;
+                let gb = s.live_from_left()[0];
+                if giant {
+                    // Preflop starts left of the Giant Blind (the first seat dealt in).
+                    first = gb.next(s.n());
+                }
                 s.betting.start_street(s.streets, first);
+                if giant {
+                    let have = s.betting.stacks()[gb.index()];
+                    s.betting.post_blind(gb, TEMPEST_GIANT_BLIND.min(have));
+                }
                 s.streets += 1;
                 s.swapped = 0;
             }
@@ -693,6 +774,95 @@ impl Scripted {
                     .map(|p| (p, Prompt::Buy))
                     .collect();
             }
+            Step::PlayRound { .. } | Step::NameGame { .. } => {
+                s.pending = s.live_from_left().into();
+            }
+            Step::DummyIfLone { n } => {
+                if s.betting.live_count() == 1 {
+                    for _ in 0..n {
+                        s.queue.push_back(Slot::Board(0));
+                    }
+                }
+            }
+        }
+    }
+
+    /// 3-5-7: everyone has chosen; a lone player gets a strike, otherwise the losers among the
+    /// players are stunned. Hands that played are shown.
+    fn resolve_play_round(&self, s: &mut State, wild: Rank, three: bool) {
+        let live = s.live_from_left();
+        let ins: Vec<Seat> = live
+            .iter()
+            .copied()
+            .filter(|p| s.plays[p.index()].take() == Some(1))
+            .collect();
+        let mask = ins.iter().fold(0u16, |m, p| m | 1 << p.0);
+        s.sys_events
+            .push((s.history.len(), Event::PlayResolved(mask)));
+        let need = match self.script.resolution {
+            Resolution::Strikes { need } => need,
+            _ => 3,
+        };
+        match ins.len() {
+            0 => {}
+            1 => {
+                let p = ins[0];
+                s.strikes[p.index()] += 1;
+                if s.strikes[p.index()] >= need {
+                    s.strike_winner = Some(p);
+                    s.done = true;
+                }
+            }
+            _ => {
+                let mut w = CardSet::EMPTY;
+                for su in Suit::ALL {
+                    w.insert(Card::new(wild, su));
+                }
+                let rule = ShareRule {
+                    name: "High",
+                    ranking: if three {
+                        Ranking::ThreeCard
+                    } else {
+                        Ranking::High
+                    },
+                    build: Build::Own,
+                    board: 0,
+                };
+                let vals: Vec<(Seat, Option<HandValue>)> = ins
+                    .iter()
+                    .map(|&p| (p, hand::share_value(&rule, &s.own(p), &[], w)))
+                    .collect();
+                let best = vals.iter().filter_map(|v| v.1).max();
+                let losers = vals
+                    .iter()
+                    .filter(|v| v.1 != best)
+                    .fold(0u16, |m, v| m | 1 << v.0.0);
+                for &p in &ins {
+                    for (j, &c) in s.down[p.index()].iter().enumerate() {
+                        s.sys_events
+                            .push((s.history.len(), Event::Showed(p, j as u8, c)));
+                    }
+                }
+                let pot = s.betting.pot() + Chips(s.carry.pot);
+                for pen in stun_amounts(
+                    pot,
+                    losers,
+                    s.setup.button,
+                    s.betting.stacks(),
+                    self.stun_rule(),
+                ) {
+                    if pen.amount > Chips::ZERO {
+                        s.betting.post_dead(pen.seat, pen.amount);
+                    }
+                }
+            }
+        }
+    }
+
+    fn stun_rule(&self) -> StunRule {
+        StunRule {
+            base_cap: Chips(1_000),
+            step: self.config.stun_step,
         }
     }
 
@@ -789,6 +959,10 @@ impl Scripted {
 
     /// Everyone's In/Out is in: reveal it; Out folds, In pays the price.
     fn resolve_in_out(&self, s: &mut State, price: Chips) {
+        let price = match s.named {
+            Some((_, _, units)) => Chips(50 * units as i64),
+            None => price,
+        };
         let mut ins = 0u16;
         for p in s.setup.seats() {
             match s.in_out[p.index()].take() {
@@ -799,7 +973,10 @@ impl Scripted {
                         s.betting.post_dead(p, pay);
                     }
                 }
-                Some(_) => s.betting.fold_out(p),
+                Some(_) => {
+                    s.betting.fold_out(p);
+                    s.outs |= 1 << p.0;
+                }
                 None => {}
             }
         }
@@ -816,7 +993,12 @@ impl Scripted {
             if s.done {
                 return;
             }
-            if s.betting.live_count() <= 1 {
+            // One player left ends the hand, except 3-2-1 Drop, where a lone player still plays
+            // the dummy hand.
+            let lone_plays_on = self.script.resolution == Resolution::Drop
+                && s.betting.live_count() == 1
+                && s.pc < self.script.steps.len();
+            if s.betting.live_count() <= 1 && !lone_plays_on {
                 s.done = true;
                 s.queue.clear();
                 return;
@@ -885,7 +1067,29 @@ impl Scripted {
                 | Step::Flip { .. }
                 | Step::FillPool { .. }
                 | Step::FlipPool { .. } => true,
-                Step::UpOrDown | Step::BuyCard { .. } => true,
+                Step::UpOrDown | Step::BuyCard { .. } | Step::DummyIfLone { .. } => true,
+                Step::PlayRound { wild, three } => {
+                    if !s.pending.is_empty() {
+                        return;
+                    }
+                    self.resolve_play_round(s, wild, three);
+                    if s.done {
+                        return;
+                    }
+                    true
+                }
+                Step::NameGame { .. } => {
+                    if s.named.is_none() && !s.pending.is_empty() {
+                        return;
+                    }
+                    if s.named.is_none() {
+                        // Everyone passed: redeal (D-SAM-2).
+                        s.done = true;
+                        return;
+                    }
+                    s.pending.clear();
+                    true
+                }
                 Step::PushStreet => {
                     if self.push_next(s) {
                         continue;
@@ -1045,6 +1249,18 @@ impl Scripted {
         wild
     }
 
+    /// Tempest: only folding, or putting in everything (raising all-in, or calling when the call
+    /// takes the whole stack). Checking is allowed only with nothing owed.
+    fn shove_or_fold(&self, s: &State, p: Seat, b: BetAction) -> bool {
+        let stack = s.betting.stacks()[p.index()];
+        let owed = s.betting.owed(p);
+        match b {
+            BetAction::Fold => true,
+            BetAction::CheckCall => owed == Chips::ZERO || owed >= stack,
+            BetAction::RaiseTo(to) => to - s.betting.street_committed(p) >= stack,
+        }
+    }
+
     /// How many answers the current prompt has.
     fn prompt_options(&self, s: &State) -> u8 {
         match s.prompts.front() {
@@ -1155,6 +1371,200 @@ impl Scripted {
         award_shares(&pots, &shares, claims.as_deref(), &order)
     }
 
+    /// Payoffs for this hand and what carries to the next (see [`Resolution`]).
+    fn settle(&self, s: &State) -> (Vec<Chips>, ScriptCarry) {
+        let n = s.n() as usize;
+        let contributed: Vec<Chips> = s.betting.contributed().to_vec();
+        let paid: Chips = contributed.iter().copied().sum();
+        let total = paid + Chips(s.carry.pot);
+        let mut carry = s.carry.clone();
+        carry.hands += 1;
+        if carry.legs.len() != n {
+            carry.legs = vec![0; n];
+        }
+        carry.strikes = s.strikes.clone();
+        let order = order_from_button(s.setup.button, s.n());
+        let all = (1u16 << n) - 1;
+        let net = |win: &[Chips], extra: &[Chips]| -> Vec<Chips> {
+            (0..n).map(|i| win[i] - contributed[i] - extra[i]).collect()
+        };
+        let zeros = vec![Chips::ZERO; n];
+        let live = s.betting.live_mask();
+        if self.out_is_out() {
+            carry.out |= (all & !live & !s.setup.dealt_out) | s.outs;
+        }
+        // Everything stays in the pot for the next hand.
+        let carry_all = |mut c: ScriptCarry| {
+            c.pot = total.0;
+            (net(&zeros, &zeros), c)
+        };
+        let best = |rule: &ShareRule, seats: u16| -> (u16, Vec<Option<HandValue>>) {
+            let mut vals = vec![None; n];
+            for i in (0..n).filter(|i| seats & (1 << i) != 0) {
+                let p = Seat(i as u8);
+                vals[i] = hand::share_value(rule, &s.own(p), &[], self.wild_for(s, p));
+            }
+            let top = vals.iter().flatten().max().copied();
+            let w = (0..n)
+                .filter(|&i| vals[i].is_some() && vals[i] == top)
+                .fold(0u16, |m, i| m | 1 << i);
+            (w, vals)
+        };
+        match self.script.resolution {
+            Resolution::Normal => {
+                if s.void {
+                    return (zeros.clone(), carry);
+                }
+                let win = self.winnings(s);
+                (net(&win, &zeros), carry)
+            }
+            Resolution::Tempest => {
+                let win = self.winnings(s);
+                if s.is_showdown() {
+                    carry.over = true;
+                } else {
+                    carry.level += 1;
+                }
+                (net(&win, &zeros), carry)
+            }
+            Resolution::Legs { need } => {
+                let winners = if live.count_ones() == 1 {
+                    live
+                } else {
+                    best(&self.script.shares[0], live).0
+                };
+                for i in (0..n).filter(|i| winners & (1 << i) != 0) {
+                    carry.legs[i] += 1;
+                }
+                let finished = (0..n)
+                    .filter(|&i| carry.legs[i] >= need)
+                    .fold(0u16, |m, i| m | 1 << i);
+                if finished != 0 {
+                    let mut win = vec![Chips::ZERO; n];
+                    split(total, finished, &order, &mut win);
+                    carry.pot = 0;
+                    carry.over = true;
+                    return (net(&win, &zeros), carry);
+                }
+                // Everyone still in the game has a leg: the counts reset.
+                let in_game = all & !carry.out;
+                if (0..n)
+                    .filter(|i| in_game & (1 << i) != 0)
+                    .all(|i| carry.legs[i] > 0)
+                {
+                    carry.legs = vec![0; n];
+                }
+                carry_all(carry)
+            }
+            Resolution::Drop => {
+                let ins: Vec<Seat> = (0..n as u8)
+                    .map(Seat)
+                    .filter(|p| live & (1 << p.0) != 0)
+                    .collect();
+                let stacks = s.betting.stacks();
+                match ins.len() {
+                    0 => carry_all(carry),
+                    1 => {
+                        let p = ins[0];
+                        let rule = self.script.shares[0];
+                        let mine = hand::share_value(&rule, &s.own(p), &[], self.script.wild);
+                        let dummy = hand::share_value(&rule, &s.boards[0], &[], self.script.wild);
+                        if mine > dummy {
+                            let mut win = vec![Chips::ZERO; n];
+                            win[p.index()] = total;
+                            carry.pot = 0;
+                            carry.over = true;
+                            (net(&win, &zeros), carry)
+                        } else {
+                            let mut stun = vec![Chips::ZERO; n];
+                            for pen in stun_amounts(
+                                total,
+                                1 << p.0,
+                                s.setup.button,
+                                stacks,
+                                self.stun_rule(),
+                            ) {
+                                stun[pen.seat.index()] = pen.amount;
+                            }
+                            carry.pot = total.0 + stun.iter().map(|x| x.0).sum::<i64>();
+                            (net(&zeros, &stun), carry)
+                        }
+                    }
+                    _ => {
+                        let (winners, _) = best(&self.script.shares[0], live);
+                        let mut win = vec![Chips::ZERO; n];
+                        split(total, winners, &order, &mut win);
+                        let mut stun = vec![Chips::ZERO; n];
+                        for pen in stun_amounts(
+                            total,
+                            live & !winners,
+                            s.setup.button,
+                            stacks,
+                            self.stun_rule(),
+                        ) {
+                            stun[pen.seat.index()] = pen.amount;
+                        }
+                        carry.pot = stun.iter().map(|x| x.0).sum();
+                        carry.over = carry.pot == 0;
+                        (net(&win, &stun), carry)
+                    }
+                }
+            }
+            Resolution::Strikes { .. } => {
+                if let Some(w) = s.strike_winner {
+                    let mut win = vec![Chips::ZERO; n];
+                    win[w.index()] = total;
+                    carry.pot = 0;
+                    carry.over = true;
+                    return (net(&win, &zeros), carry);
+                }
+                carry_all(carry)
+            }
+            Resolution::Declarer => {
+                let Some((d, game, _)) = s.named else {
+                    return carry_all(carry);
+                };
+                let ranking = [
+                    Ranking::High,
+                    Ranking::LowA6,
+                    Ranking::NumbersHigh,
+                    Ranking::NumbersLow,
+                ][game as usize];
+                let rule = ShareRule {
+                    name: "Named",
+                    ranking,
+                    build: Build::Own,
+                    board: 0,
+                };
+                let (winners, _) = best(&rule, live);
+                if winners == 1 << d.0 {
+                    let mut win = vec![Chips::ZERO; n];
+                    win[d.index()] = total;
+                    carry.pot = 0;
+                    carry.over = true;
+                    (net(&win, &zeros), carry)
+                } else {
+                    let mut stun = vec![Chips::ZERO; n];
+                    for pen in stun_amounts(
+                        total,
+                        1 << d.0,
+                        s.setup.button,
+                        s.betting.stacks(),
+                        self.stun_rule(),
+                    ) {
+                        stun[pen.seat.index()] = pen.amount;
+                    }
+                    carry.pot = total.0 + stun.iter().map(|x| x.0).sum::<i64>();
+                    (net(&zeros, &stun), carry)
+                }
+            }
+        }
+    }
+
+    fn out_is_out(&self) -> bool {
+        self.script.out_is_out
+    }
+
     /// Whether `viewer` can see `p`'s face-down cards right now.
     fn sees_down(&self, s: &State, viewer: Seat, p: Seat) -> bool {
         let showdown_shown = s.is_showdown() && !s.betting.is_folded(p);
@@ -1190,6 +1600,9 @@ fn kept_card(hand: &[Card], m: u8) -> Card {
 }
 
 const DECLARE_OPTIONS: [u8; 3] = [0, 1, 2];
+/// Tempest (D-TEM-1): Giant Blind $2; at most 10 Giant Blinds per player per hand.
+const TEMPEST_GIANT_BLIND: Chips = Chips(200);
+const TEMPEST_CAP: Chips = Chips(2000);
 
 /// One dealt card in a determinization: a hidden slot or a known card.
 #[derive(Copy, Clone, Debug)]
@@ -1203,7 +1616,7 @@ impl Game for Scripted {
     type Action = Action;
     type Observation = Observation;
     type Config = Config;
-    type Carry = ();
+    type Carry = ScriptCarry;
 
     fn new(config: Config) -> Scripted {
         let mut script = games::script(&config.game)
@@ -1224,7 +1637,7 @@ impl Game for Scripted {
             display_name: script.name,
             seats: 2..=script.max_seats,
             stake_model: StakeModel::Bankroll,
-            length: GameLength::SingleHand,
+            length: script.length,
             rules_ref: script.rules_ref,
         };
         Scripted {
@@ -1238,20 +1651,45 @@ impl Game for Scripted {
         &self.meta
     }
 
-    fn new_hand_with(&self, setup: &HandSetup, _carry: &()) -> State {
+    fn new_hand_with(&self, setup: &HandSetup, carry: &ScriptCarry) -> State {
         let n = setup.num_seats as usize;
-        let min_bet = match self.config.structure {
+        let tempest = self.script.resolution == Resolution::Tempest;
+        let structure = if tempest {
+            Structure::NoLimit
+        } else {
+            self.config.structure
+        };
+        let min_bet = match structure {
             Structure::SpreadLimit { min_inc, .. } => min_inc,
             Structure::FixedLimit { small, .. } => small,
             _ => Chips(100),
         };
-        let mut betting = Betting::new(self.config.structure, &setup.stacks, min_bet);
-        if setup.first_hand_of_game && self.config.dealer_ante > Chips::ZERO {
-            betting.post_dead(setup.chooser, self.config.dealer_ante);
+        // Tempest caps what anyone can wager in a hand at 10 Giant Blinds (D-TEM-1).
+        let stacks: Vec<Chips> = if tempest {
+            setup.stacks.iter().map(|&x| x.min(TEMPEST_CAP)).collect()
+        } else {
+            setup.stacks.clone()
+        };
+        let mut betting = Betting::new(structure, &stacks, min_bet);
+        for p in setup.seats().filter(|&p| !setup.dealt_in(p)) {
+            betting.fold_out(p);
         }
-        if self.script.ante_each > Chips::ZERO {
-            for p in setup.seats() {
-                betting.post_dead(p, self.script.ante_each.min(setup.stacks[p.index()]));
+        let dealt_in: Vec<Seat> = setup.seats().filter(|&p| setup.dealt_in(p)).collect();
+        // Tempest has its own money rules (D-TEM-1): no dealer ante.
+        if setup.first_hand_of_game && self.config.dealer_ante > Chips::ZERO && !tempest {
+            betting.post_dead(
+                setup.chooser,
+                self.config.dealer_ante.min(stacks[setup.chooser.index()]),
+            );
+        }
+        let ante = if tempest {
+            Chips(50 * (carry.level as i64 + 1))
+        } else {
+            self.script.ante_each
+        };
+        if ante > Chips::ZERO && (!self.script.ante_first_hand_only || carry.hands == 0) {
+            for &p in &dealt_in {
+                betting.post_dead(p, ante.min(stacks[p.index()]));
             }
         }
         let mut s = State {
@@ -1285,6 +1723,16 @@ impl Game for Scripted {
             middle: SmallVec::new(),
             bids: vec![None; n],
             bid_phase: 0,
+            carry: carry.clone(),
+            strikes: if carry.strikes.len() == n {
+                carry.strikes.clone()
+            } else {
+                vec![0; n]
+            },
+            strike_winner: None,
+            plays: vec![None; n],
+            named: None,
+            outs: 0,
             betting,
             queue: VecDeque::new(),
             deal_log: Vec::new(),
@@ -1323,6 +1771,25 @@ impl Game for Scripted {
             ToAct::Seat(_) if !s.prompts.is_empty() => {
                 out.extend((0..self.prompt_options(s)).map(Action::Choose))
             }
+            ToAct::Seat(_) if matches!(self.script.steps[s.pc], Step::PlayRound { .. }) => {
+                out.extend([Action::Play(1), Action::Play(0)])
+            }
+            ToAct::Seat(_) if matches!(self.script.steps[s.pc], Step::NameGame { .. }) => {
+                if let Step::NameGame { max_units } = self.script.steps[s.pc] {
+                    out.push(Action::Name(0));
+                    for game in 0..4u8 {
+                        for units in 1..=max_units {
+                            out.push(Action::Name(1 + game * 4 + (units - 1)));
+                        }
+                    }
+                }
+            }
+            ToAct::Seat(p)
+                if matches!(self.script.steps[s.pc], Step::InOut { .. })
+                    && s.named.is_some_and(|(d, _, _)| d == p) =>
+            {
+                out.push(Action::InOut(1)); // the declarer is always in
+            }
             ToAct::Seat(_) if matches!(self.script.steps[s.pc], Step::BidRound { .. }) => {
                 if let Step::BidRound { max_units } = self.script.steps[s.pc] {
                     out.extend((0..=max_units).map(Action::Bid));
@@ -1349,6 +1816,15 @@ impl Game for Scripted {
                     let mut masks = Vec::new();
                     self.throw_masks(s, p, &mut masks);
                     out.extend(masks.into_iter().map(Action::Draw));
+                }
+                _ if self.script.resolution == Resolution::Tempest => {
+                    out.extend(
+                        s.betting
+                            .menu(p, &[BetSize::AllIn])
+                            .into_iter()
+                            .filter(|&b| self.shove_or_fold(s, p, b))
+                            .map(Action::from_bet),
+                    );
                 }
                 _ => {
                     out.extend(
@@ -1380,6 +1856,21 @@ impl Game for Scripted {
             }
             (ToAct::Seat(_), _) if !s.prompts.is_empty() => {
                 Err(IllegalAction("answer the question first".into()))
+            }
+            (ToAct::Seat(_), a) if matches!(self.script.steps[s.pc], Step::PlayRound { .. }) => {
+                match a {
+                    Action::Play(x) if x < 2 => Ok(()),
+                    _ => Err(IllegalAction("play or drop".into())),
+                }
+            }
+            (ToAct::Seat(_), a) if matches!(self.script.steps[s.pc], Step::NameGame { .. }) => {
+                match (self.script.steps[s.pc], a) {
+                    (Step::NameGame { max_units }, Action::Name(k)) if k <= 4 * max_units => Ok(()),
+                    _ => Err(IllegalAction("name the game and price, or pass".into())),
+                }
+            }
+            (ToAct::Seat(p), Action::InOut(0)) if s.named.is_some_and(|(d, _, _)| d == p) => {
+                Err(IllegalAction("you named the game: you're in".into()))
             }
             (ToAct::Seat(_), a) if matches!(self.script.steps[s.pc], Step::BidRound { .. }) => {
                 match (self.script.steps[s.pc], a) {
@@ -1466,6 +1957,12 @@ impl Game for Scripted {
                     }
                 }
                 (_, a) => match a.as_bet() {
+                    Some(b)
+                        if self.script.resolution == Resolution::Tempest
+                            && !self.shove_or_fold(s, p, b) =>
+                    {
+                        Err(IllegalAction("Tempest: all-in or fold".into()))
+                    }
                     Some(b) => s.betting.validate(p, b),
                     None => Err(IllegalAction("it's a betting round".into())),
                 },
@@ -1619,6 +2116,21 @@ impl Game for Scripted {
                 s.bids[p.index()] = Some(b);
                 Some(p)
             }
+            Action::Play(x) => {
+                let p = s.pending.pop_front().expect("no player");
+                s.plays[p.index()] = Some(x);
+                Some(p)
+            }
+            Action::Name(k) => {
+                let p = s.pending.pop_front().expect("no namer");
+                if k > 0 {
+                    let game = (k - 1) / 4;
+                    let units = (k - 1) % 4 + 1;
+                    s.named = Some((p, game, units));
+                    s.pending.clear();
+                }
+                Some(p)
+            }
             Action::Direction(d) => {
                 let p = s.pending.pop_front().expect("no chooser");
                 s.direction = d;
@@ -1676,11 +2188,26 @@ impl Game for Scripted {
     }
 
     fn payoffs(&self, s: &State) -> Vec<Chips> {
-        self.winnings(s)
-            .iter()
-            .zip(s.betting.contributed())
-            .map(|(&w, &c)| w - c)
-            .collect()
+        self.settle(s).0
+    }
+
+    fn carry_out(&self, s: &State) -> ScriptCarry {
+        self.settle(s).1
+    }
+
+    fn game_over(&self, c: &ScriptCarry) -> bool {
+        match self.script.length {
+            GameLength::UntilDone { .. } => c.over,
+            _ => true,
+        }
+    }
+
+    fn carried_chips(&self, c: &ScriptCarry) -> Chips {
+        Chips(c.pot)
+    }
+
+    fn seats_out(&self, c: &ScriptCarry) -> u16 {
+        c.out
     }
 
     fn observe(&self, s: &State, seat: Seat) -> Observation {
@@ -1752,6 +2279,13 @@ impl Game for Scripted {
                     }
                     Event::BidChosen(p)
                 }
+                (Some(p), Action::Play(x)) => {
+                    if p == seat {
+                        own_choices.push(x);
+                    }
+                    Event::PlayChosen(p)
+                }
+                (Some(p), Action::Name(k)) => Event::Named(p, k),
                 (Some(p), Action::Pass(m)) => {
                     if p == seat {
                         own_choices.push(m);
@@ -1799,6 +2333,7 @@ impl Game for Scripted {
             own_shown: (self.script.visibility == Visibility::Indian && showdown)
                 .then(|| s.down[seat.index()].clone()),
             own_received: s.received[seat.index()].clone(),
+            carry: s.carry.clone(),
         }
     }
 
@@ -1943,7 +2478,31 @@ impl Game for Scripted {
                 | Event::Board(_, c)
                 | Event::BoardAt(_, _, c)
                 | Event::Middle(c) => deals.push((DealRef::Known(c), epoch)),
-                Event::Chose(..) | Event::BidShown(..) => {}
+                Event::Chose(..)
+                | Event::BidShown(..)
+                | Event::Named(..)
+                | Event::PlayResolved(_) => {}
+                Event::PlayChosen(p) => {
+                    let x = if p == me {
+                        *own.next().expect("own play missing")
+                    } else {
+                        obs.history[ei..]
+                            .iter()
+                            .find_map(|x| match *x {
+                                Event::PlayResolved(m) => Some(((m >> p.0) & 1) as u8),
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| rng.random_range(0..2))
+                    };
+                    choices.push(Action::Play(x));
+                }
+                Event::Showed(p, j, c) => {
+                    if let Some(&id) = hand_slots[p.index()].get(j as usize)
+                        && slot_card[id].is_none()
+                    {
+                        slot_card[id] = Some(c);
+                    }
+                }
                 Event::BidChosen(p) => {
                     let b = if p == me {
                         *own.next().expect("own bid missing")
@@ -2138,8 +2697,13 @@ impl Game for Scripted {
                     pass_masks.push(masks);
                 }
                 Event::InOutChosen(p) => {
+                    let declarer = obs.history[..ei]
+                        .iter()
+                        .any(|x| matches!(*x, Event::Named(q, k) if q == p && k > 0));
                     let x = if p == me {
                         *own.next().expect("own in/out missing")
+                    } else if declarer {
+                        1 // the declarer is always in
                     } else {
                         match in_out_revealed {
                             Some(m) => ((m >> p.0) & 1) as u8,
@@ -2359,6 +2923,8 @@ impl Game for Scripted {
         for e in &obs.history {
             match *e {
                 Event::Chose(_, k) => actions.push(Action::Choose(k)),
+                Event::Named(_, k) => actions.push(Action::Name(k)),
+                Event::PlayResolved(_) | Event::Showed(..) => {}
                 Event::Middle(_) | Event::BidShown(..) => {}
                 Event::HiddenDeal(_)
                 | Event::Up(..)
@@ -2393,6 +2959,7 @@ impl Game for Scripted {
                 | Event::Ordered(p)
                 | Event::Spat(p)
                 | Event::BidChosen(p)
+                | Event::PlayChosen(p)
                 | Event::InOutChosen(p) => {
                     if p == me {
                         own_decl.next();
@@ -2418,7 +2985,7 @@ impl Game for Scripted {
                 DealRef::Slot(id) => slot_card[id].expect("every slot has a card"),
             }));
         }
-        replay_interleaved(self, &obs.setup, deal_actions, actions)
+        replay_interleaved_with(self, &obs.setup, &obs.carry, deal_actions, actions)
     }
 
     fn classify(&self, s: &State, a: Action) -> ActionClass {
@@ -2437,7 +3004,11 @@ impl Game for Scripted {
             Action::Draw(_) | Action::Arrange(_) | Action::Pass(_) | Action::Order(_) => {
                 ActionClass::CardChoice
             }
-            Action::Direction(_) | Action::InOut(_) | Action::Bid(_) => ActionClass::Declare,
+            Action::Direction(_)
+            | Action::InOut(_)
+            | Action::Bid(_)
+            | Action::Play(_)
+            | Action::Name(_) => ActionClass::Declare,
             Action::Choose(_) => ActionClass::CardChoice,
         }
     }
@@ -2635,6 +3206,14 @@ impl Game for Scripted {
             Action::InOut(_) => "Out".into(),
             Action::Order(i) => format!("reveal order #{i}"),
             Action::Bid(b) => format!("bid {}", Chips(50 * b as i64)),
+            Action::Play(1) => "play".into(),
+            Action::Play(_) => "drop".into(),
+            Action::Name(0) => "pass".into(),
+            Action::Name(k) => {
+                let game = ["high poker", "low poker", "high numbers", "low numbers"]
+                    [((k - 1) / 4) as usize];
+                format!("name {game} at {}", Chips(50 * ((k - 1) % 4 + 1) as i64))
+            }
             Action::Choose(k) => format!("choose {k}"),
             Action::Arrange(k) => {
                 let p = PAIRINGS[k as usize].map(|i| i + 1);
@@ -2707,6 +3286,14 @@ pub enum Event {
     BidChosen(Seat),
     /// Bid: this seat's bid, revealed with everyone's.
     BidShown(Seat, u8),
+    /// 3-5-7: this seat chose to play or drop (hidden until all have).
+    PlayChosen(Seat),
+    /// 3-5-7: who played this round (bitmask).
+    PlayResolved(u16),
+    /// A played hand is shown: seat, position in its face-down cards, card.
+    Showed(Seat, u8, Card),
+    /// Scare-a-moosh: this seat named the game (or passed: 0).
+    Named(Seat, u8),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -2726,6 +3313,8 @@ pub struct Observation {
     pub own_shown: Option<SmallVec<[Card; 8]>>,
     /// Cards passed to this seat, in order.
     pub own_received: SmallVec<[Card; 8]>,
+    /// What this hand carried in from earlier hands of the game (public).
+    pub carry: ScriptCarry,
 }
 
 #[cfg(test)]
