@@ -23,6 +23,8 @@ pub struct DecisionContext {
     pub pot: Chips,
     /// What this seat has already put in on this street (to size raises by their increment).
     pub street_committed: Chips,
+    /// Chips the seat still has behind (to recognize all-in bets).
+    pub stack: Chips,
 }
 
 /// Display names for every id a game's analysis hooks can return.

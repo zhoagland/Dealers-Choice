@@ -169,6 +169,10 @@ pub struct RunSpec {
     /// Charge the dealer ante on every hand (default off: it models one-hand-per-game play).
     #[serde(default)]
     pub dealer_ante: bool,
+    /// Aggregate results per starting hand and per decision situation over every hand
+    /// (`study.rs`). Costs a little speed; off by default.
+    #[serde(default)]
+    pub study: bool,
 }
 
 fn yes() -> bool {

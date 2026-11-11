@@ -609,6 +609,7 @@ impl Game for Holdem {
             strength,
             pot: s.betting.pot(),
             street_committed: s.betting.street_committed(seat),
+            stack: s.betting.stacks()[seat.index()],
         })
     }
 

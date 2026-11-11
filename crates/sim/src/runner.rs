@@ -23,6 +23,7 @@ use engine::{ActionClass, Chips, Game, HandSetup, Seat, StakeModel, ToAct};
 use crate::encoding::{HandRecord, encode};
 use crate::spec::RunSpec;
 use crate::stats::Welford;
+use crate::study::{HandStudy, Study, StudyRows};
 
 /// Where kept hand records go.
 pub trait RecordSink {
@@ -103,6 +104,8 @@ pub struct RunReport {
     pub bots: Vec<BotReport>,
     pub throughput: Throughput,
     pub records_kept: u64,
+    /// Per-starting-hand and per-decision aggregates, when `spec.study`.
+    pub study: Option<StudyRows>,
 }
 
 /// Everything one deal produced.
@@ -114,6 +117,7 @@ struct DealOutcome {
     decisions: u64,
     bytes: u64,
     kept: Vec<Vec<u8>>,
+    study: Option<Study>,
 }
 
 /// Run `spec` on `game`. `on_progress(done, total)` is called after each batch.
@@ -142,6 +146,7 @@ pub fn run<G: Game>(
     let mut results = vec![Welford::default(); n];
     let mut actions = vec![ActionCounts::default(); n];
     let (mut hands, mut decisions, mut bytes, mut kept) = (0u64, 0u64, 0u64, 0u64);
+    let mut study = spec.study.then(Study::default);
 
     const BATCH: u64 = 1_024;
     let mut d0 = 0;
@@ -163,6 +168,9 @@ pub fn run<G: Game>(
             for r in &out.kept {
                 sink.write(r);
                 kept += 1;
+            }
+            if let (Some(total), Some(part)) = (study.as_mut(), out.study.as_ref()) {
+                total.merge(part);
             }
         }
         d0 = d1;
@@ -194,6 +202,7 @@ pub fn run<G: Game>(
             mb_per_day_full_history: hands_per_sec * bytes_per_hand * 86_400.0 / 1e6,
         },
         records_kept: kept,
+        study: study.map(|s| s.to_rows()),
     }
 }
 
@@ -213,6 +222,7 @@ fn play_deal<G: Game>(
         decisions: 0,
         bytes: 0,
         kept: Vec::new(),
+        study: spec.study.then(Study::default),
     };
     let button = Seat((d % n as u64) as u8);
     let setup = HandSetup {
@@ -243,11 +253,19 @@ fn play_deal<G: Game>(
         }
         // Classify each decision (replaying: `classify` needs the state at that moment).
         let mut state = game.new_hand(&setup);
+        let mut hand_study = out.study.is_some().then(|| HandStudy::new(n));
         for &a in &result.actions {
             if let ToAct::Seat(p) = game.to_act(&state) {
                 out.actions[seating[p.index()]].add(game.classify(&state, a));
+                if let Some(h) = hand_study.as_mut() {
+                    h.on_decision(game, &state, p, a);
+                }
             }
             game.apply(&mut state, a);
+        }
+        if let (Some(h), Some(total)) = (hand_study, out.study.as_mut()) {
+            let results: Vec<f64> = result.payoffs.iter().map(|p| p.0 as f64 / unit).collect();
+            h.finish(game, &state, setup.button, &results, total);
         }
         let record = encode(&HandRecord::new(
             game.meta().id,
@@ -287,6 +305,7 @@ mod tests {
             history_sample: 0.0,
             stack: None,
             dealer_ante: false,
+            study: false,
         }
     }
 

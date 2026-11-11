@@ -3,6 +3,7 @@
 //! `clap`'s derive API turns the structs below into an argument parser: each field is a flag,
 //! each enum variant a subcommand, and the doc comments become `--help` text.
 
+mod analyze;
 mod config_tui;
 mod human;
 mod play;
@@ -55,6 +56,9 @@ enum Command {
     Sim(simulate::SimArgs),
     /// Measure throughput and data rate on fixed workloads.
     BenchSim(simulate::BenchArgs),
+    /// Study campaigns: millions of hands per game, with a dashboard per game.
+    #[command(subcommand)]
+    Analyze(analyze::AnalyzeCmd),
 }
 
 fn main() {
@@ -72,6 +76,7 @@ fn main() {
         Command::Spot(args) => spot::run(args),
         Command::Sim(args) => simulate::sim(args, &root, &profiles),
         Command::BenchSim(args) => simulate::bench(args),
+        Command::Analyze(cmd) => analyze::run(cmd, &root),
     };
     if let Err(e) = result {
         eprintln!("error: {e}");

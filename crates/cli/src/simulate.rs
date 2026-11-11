@@ -60,6 +60,7 @@ pub fn default_spec() -> RunSpec {
         history_sample: 0.0,
         stack: None,
         dealer_ante: false,
+        study: false,
     }
 }
 
@@ -92,7 +93,7 @@ impl SimArgs {
 }
 
 /// Size rayon's global thread pool. Must run before any parallel work.
-fn set_threads(threads: Option<usize>) -> CliResult {
+pub(crate) fn set_threads(threads: Option<usize>) -> CliResult {
     if let Some(n) = threads {
         rayon::ThreadPoolBuilder::new()
             .num_threads(n.max(1))
@@ -140,7 +141,7 @@ pub fn sim(args: SimArgs, root: &DataRoot, profiles: &ProfileStore) -> CliResult
 }
 
 /// Run a spec. Records go to `records` (a plain file) if given, else into `save_dir` as zstd.
-fn run_spec(
+pub(crate) fn run_spec(
     spec: &RunSpec,
     records: Option<&PathBuf>,
     save_dir: Option<&PathBuf>,
@@ -265,6 +266,7 @@ pub fn bench(args: BenchArgs) -> CliResult {
             history_sample: 0.0,
             stack: None,
             dealer_ante: false,
+            study: false,
         };
         let r = run_spec(&spec, None, None)?;
         let t = &r.throughput;

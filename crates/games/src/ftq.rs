@@ -668,6 +668,7 @@ impl Game for FollowTheQueen {
             strength,
             pot: s.betting.pot(),
             street_committed: s.betting.street_committed(seat),
+            stack: s.betting.stacks()[seat.index()],
         })
     }
 
