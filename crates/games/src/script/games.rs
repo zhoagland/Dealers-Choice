@@ -13,6 +13,7 @@ use engine::{CardSet, Chips};
 
 use super::hand::{Build, Ranking, ShareRule};
 use super::{ActOrder, DeckKind, DeclareKind, Script, Step, Variant, Visibility};
+use engine::view::BoardLayout;
 
 use Step::*;
 
@@ -52,6 +53,12 @@ pub const SCRIPTED_IDS: &[&str] = &[
     "pass_the_trash",
     "man_or_mouse",
     "game_43",
+    // G2 Board shapes
+    "elevator",
+    "wheel_of_death",
+    "spit",
+    "industrial_elevator",
+    "iron_cross",
 ];
 
 /// The script for `id`.
@@ -143,6 +150,11 @@ pub fn script(id: &str) -> Option<Script> {
         "pass_the_trash" => pass_the_trash(),
         "man_or_mouse" => man_or_mouse(),
         "game_43" => game_43(),
+        "elevator" => elevator(),
+        "wheel_of_death" => wheel_of_death(),
+        "spit" => spit(),
+        "industrial_elevator" => industrial_elevator(),
+        "iron_cross" => iron_cross(),
         _ => return None,
     })
 }
@@ -201,6 +213,9 @@ fn base(id: &'static str, name: &'static str, rules_ref: &'static str) -> Script
         has_high_only: false,
         swap_instead_of_fold: false,
         variants: Vec::new(),
+        layout: BoardLayout::Row,
+        positions: 0,
+        lines: Vec::new(),
     }
 }
 
@@ -824,5 +839,299 @@ fn game_43() -> Script {
         declare: Some(DeclareKind::HiLo),
         boards: 0,
         ..base("game_43", "43", "Poker Bible §43")
+    }
+}
+
+// ----- G2 Board shapes ------------------------------------------------------------------------
+
+/// Board positions as static one-element slices, for flip-one-at-a-time variations.
+const POS: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+
+/// Split every multi-card `Flip` into single-card flips, each followed by a betting round.
+fn flip_singly(s: &mut Script) {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < s.steps.len() {
+        match s.steps[i] {
+            Flip { board, positions }
+                if positions.len() > 1 && s.steps.get(i + 1) == Some(&Bet) =>
+            {
+                for &p in positions {
+                    out.extend([
+                        Flip {
+                            board,
+                            positions: &POS[p as usize..p as usize + 1],
+                        },
+                        Bet,
+                    ]);
+                }
+                i += 2;
+            }
+            st => {
+                out.push(st);
+                i += 1;
+            }
+        }
+    }
+    s.steps = out;
+}
+
+/// Elevator: PLO hands with an H of 7 community cards (positions: left column top→bottom 0-2,
+/// centre 3, right column top→bottom 4-6). The red set {0, 2, 5} flips, then the black set
+/// {4, 1, 6}, then the blue centre. Hands are 2 from hand + the 3 cards of one line: left column,
+/// right column, or the middle row {1, 3, 5}; high and low may use different lines. Hi/lo declare.
+/// **D-ELV-1** the Bible lets either set flip first; the H is mirror-symmetric, so it changes
+/// nothing: red first. Variation `two_at_a_time` (the Bible's).
+fn elevator() -> Script {
+    Script {
+        steps: vec![
+            Down(4),
+            Bet,
+            Flip {
+                board: 0,
+                positions: &[0, 2, 5],
+            },
+            Bet,
+            Flip {
+                board: 0,
+                positions: &[4, 1, 6],
+            },
+            Bet,
+            Flip {
+                board: 0,
+                positions: &[3],
+            },
+            Bet,
+            Declare,
+        ],
+        shares: vec![HIGH_OMAHA, LOW_OMAHA],
+        declare: Some(DeclareKind::HiLo),
+        layout: BoardLayout::H,
+        positions: 7,
+        lines: vec![vec![0, 1, 2], vec![4, 5, 6], vec![1, 3, 5]],
+        variants: vec![Variant {
+            name: "two_at_a_time",
+            apply: |s| {
+                s.steps = vec![Down(4), Bet];
+                for positions in [&[0u8, 2][..], &[5, 4], &[1, 6], &[3]] {
+                    s.steps.extend([
+                        Flip {
+                            board: 0,
+                            positions,
+                        },
+                        Bet,
+                    ]);
+                }
+                s.steps.push(Declare);
+            },
+        }],
+        ..base(
+            "elevator",
+            "Elevator (hi/lo declare)",
+            "Poker Bible §Elevator",
+        )
+    }
+}
+
+/// Wheel of Death: PLO hands; 9 community cards in a ring; a hand uses 2 from hand + 3 consecutive
+/// ring cards. Flips {0, 3, 6}, {1, 4, 7}, {2, 5, 8}. Hi/lo declare. Variations `eight_cards`
+/// and `flip_one_at_a_time` (the Bible's).
+fn wheel_of_death() -> Script {
+    let ring = |n: u8| (0..n).map(|i| vec![i, (i + 1) % n, (i + 2) % n]).collect();
+    Script {
+        steps: vec![
+            Down(4),
+            Bet,
+            Flip {
+                board: 0,
+                positions: &[0, 3, 6],
+            },
+            Bet,
+            Flip {
+                board: 0,
+                positions: &[1, 4, 7],
+            },
+            Bet,
+            Flip {
+                board: 0,
+                positions: &[2, 5, 8],
+            },
+            Bet,
+            Declare,
+        ],
+        shares: vec![HIGH_OMAHA, LOW_OMAHA],
+        declare: Some(DeclareKind::HiLo),
+        layout: BoardLayout::Wheel,
+        positions: 9,
+        lines: ring(9),
+        variants: vec![
+            Variant {
+                name: "eight_cards",
+                apply: |s| {
+                    s.positions = 8;
+                    s.lines = (0..8u8)
+                        .map(|i| vec![i, (i + 1) % 8, (i + 2) % 8])
+                        .collect();
+                    for st in s.steps.iter_mut() {
+                        if let Flip { positions, .. } = st
+                            && positions.contains(&8)
+                        {
+                            *positions = &[2, 5];
+                        }
+                    }
+                },
+            },
+            Variant {
+                name: "flip_one_at_a_time",
+                apply: flip_singly,
+            },
+        ],
+        ..base(
+            "wheel_of_death",
+            "Wheel of Death (hi/lo declare)",
+            "Poker Bible §Wheel of Death",
+        )
+    }
+}
+
+/// Spit: 5 hole cards; everyone throws one face down into the middle, which is topped up to 9
+/// cards and shuffled; the middle cards are turned one at a time with a betting round after each.
+/// Hi/lo declare. Variation `three_at_a_time` (the Bible's).
+/// - **D-SPIT-1** throws are chosen in turn and stay hidden; a player knows only that their own
+///   card is somewhere in the middle.
+/// - **D-SPIT-2** hands are 2 from the remaining 4 hole cards + any 3 middle cards.
+/// - **D-SPIT-3** max 9 seats (the middle always has 9).
+fn spit() -> Script {
+    let mut steps = vec![Down(5), Spit, FillPool { total: 9 }, Bet];
+    for _ in 0..9 {
+        steps.extend([FlipPool { board: 0, n: 1 }, Bet]);
+    }
+    steps.push(Declare);
+    Script {
+        steps,
+        shares: vec![HIGH_OMAHA, LOW_OMAHA],
+        declare: Some(DeclareKind::HiLo),
+        layout: BoardLayout::Middle,
+        variants: vec![Variant {
+            name: "three_at_a_time",
+            apply: |s| {
+                s.steps = vec![Down(5), Spit, FillPool { total: 9 }, Bet];
+                for _ in 0..3 {
+                    s.steps.extend([FlipPool { board: 0, n: 3 }, Bet]);
+                }
+                s.steps.push(Declare);
+            },
+        }],
+        ..base("spit", "Spit (hi/lo declare)", "Poker Bible §Spit")
+    }
+}
+
+const IE_SPLITS: &[(u8, u8)] = &[(2, 3), (3, 2)];
+
+/// Industrial Elevator: 5 hole cards; a hand is 2 hole + 3 board or 3 hole + 2 board, with the
+/// board cards from one line. Board: a column of 4 (positions 0-3, top→bottom) crossed at its
+/// second card by a row (left 4, then 5, 6 to the right). High only.
+/// - **D-IE-1** a usable board set is cards from one straight line (the column or the row).
+/// - **D-IE-2** flips: the two on the right (flop), the one on the left (turn), then the column
+///   top to bottom, one at a time, each with a betting round.
+/// - Variation `five_in_elevator` (the Bible's): a column of 5.
+fn industrial_elevator() -> Script {
+    let mut steps = vec![
+        Down(5),
+        Bet,
+        Flip {
+            board: 0,
+            positions: &[5, 6],
+        },
+        Bet,
+        Flip {
+            board: 0,
+            positions: &[4],
+        },
+        Bet,
+    ];
+    for p in 0..4usize {
+        steps.extend([
+            Flip {
+                board: 0,
+                positions: &POS[p..p + 1],
+            },
+            Bet,
+        ]);
+    }
+    Script {
+        steps,
+        shares: vec![ShareRule {
+            build: Build::Combos(IE_SPLITS),
+            ..HIGH_ANY
+        }],
+        layout: BoardLayout::Elevator,
+        positions: 7,
+        lines: vec![vec![0, 1, 2, 3], vec![4, 1, 5, 6]],
+        variants: vec![Variant {
+            name: "five_in_elevator",
+            apply: |s| {
+                s.positions = 8;
+                s.lines = vec![vec![0, 1, 2, 3, 4], vec![5, 1, 6, 7]];
+                s.steps = vec![
+                    Down(5),
+                    Bet,
+                    Flip {
+                        board: 0,
+                        positions: &[6, 7],
+                    },
+                    Bet,
+                    Flip {
+                        board: 0,
+                        positions: &[5],
+                    },
+                    Bet,
+                ];
+                for p in 0..5usize {
+                    s.steps.extend([
+                        Flip {
+                            board: 0,
+                            positions: &POS[p..p + 1],
+                        },
+                        Bet,
+                    ]);
+                }
+            },
+        }],
+        ..base(
+            "industrial_elevator",
+            "Industrial Elevator",
+            "Poker Bible §Industrial Elevator",
+        )
+    }
+}
+
+const IC_SPLITS: &[(u8, u8)] = &[(4, 1), (3, 2), (2, 3)];
+
+/// Iron Cross: 4 hole cards and a $1 ante each; one betting round; then the cross (a row of 3
+/// and a column of 3 sharing the centre: row 0-2, column top 3 and bottom 4) is turned and hands
+/// are shown. High only.
+/// - **D-IC-1** best 5 from the 4 hole cards + the row *or* the column.
+/// - **D-IC-2** a single betting round (as written). The Bible's stun variation plays an orbit
+///   with stuns; it needs the multi-hand driver (G8).
+fn iron_cross() -> Script {
+    Script {
+        steps: vec![
+            Down(4),
+            Bet,
+            Flip {
+                board: 0,
+                positions: &[0, 1, 2, 3, 4],
+            },
+        ],
+        ante_each: Chips(100),
+        shares: vec![ShareRule {
+            build: Build::Combos(IC_SPLITS),
+            ..HIGH_ANY
+        }],
+        layout: BoardLayout::Cross,
+        positions: 5,
+        lines: vec![vec![0, 1, 2], vec![3, 1, 4]],
+        ..base("iron_cross", "Iron Cross", "Poker Bible §Iron Cross")
     }
 }

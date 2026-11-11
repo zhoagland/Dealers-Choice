@@ -488,3 +488,91 @@ fn in_pays_a_dollar_in_43_and_all_out_is_void() {
         "everyone Out: all chips back"
     );
 }
+
+/// Value of seat `p` for share `k` with a hand-built board (positions in order 0..).
+fn shaped_value(id: &str, own: &[&str], board: &[(u8, &str)], k: usize) -> Option<HandValue> {
+    let g = game(id);
+    let sc = g.script();
+    let own: Vec<Card> = own.iter().map(|c| card(c)).collect();
+    sc.lines
+        .iter()
+        .filter_map(|line| {
+            let cards: Vec<Card> = board
+                .iter()
+                .filter(|(at, _)| line.contains(at))
+                .map(|(_, c)| card(c))
+                .collect();
+            hand::share_value(&sc.shares[k], &own, &cards, sc.wild)
+        })
+        .max()
+}
+
+#[test]
+fn elevator_hands_use_one_line() {
+    // Spades at positions 0 (left top), 4 (right top), 3 (centre): no line holds all three, so no
+    // flush even with two spades in hand.
+    let board = [(0, "As"), (4, "Ks"), (3, "Qs"), (1, "2d"), (2, "3c"), (5, "8h"), (6, "9c")];
+    let v = shaped_value("elevator", &["Js", "Ts", "4d", "5h"], &board, 0).unwrap();
+    assert_ne!(v.category(), engine::Category::Flush);
+    // Put them in the middle row (1, 3, 5) and it is a royal flush.
+    let board = [(1, "As"), (3, "Ks"), (5, "Qs"), (0, "2d"), (2, "3c"), (4, "8h"), (6, "9c")];
+    let v = shaped_value("elevator", &["Js", "Ts", "4d", "5h"], &board, 0).unwrap();
+    assert_eq!(v.category(), engine::Category::RoyalFlush);
+}
+
+#[test]
+fn wheel_of_death_needs_three_in_a_row() {
+    // Trips need the pair in hand + one board 7: always possible. A straight needs 3 consecutive
+    // ring cards: 8 at 0, 9 at 1, T at 2 with J Q in hand = straight.
+    let board = [
+        (0, "8c"), (1, "9d"), (2, "Th"), (3, "2c"), (4, "3d"), (5, "4h"), (6, "5c"), (7, "Kd"), (8, "Ah"),
+    ];
+    let v = shaped_value("wheel_of_death", &["Jc", "Qd", "2s", "3s"], &board, 0).unwrap();
+    assert_eq!(v.category(), engine::Category::Straight);
+    // Spread 8, 9, T around the ring (0, 3, 6): no three-in-a-row straight.
+    let board = [
+        (0, "8c"), (3, "9d"), (6, "Th"), (1, "2c"), (4, "3d"), (7, "4h"), (2, "5c"), (5, "Kd"), (8, "Ah"),
+    ];
+    let v = shaped_value("wheel_of_death", &["Jc", "Qd", "2s", "3s"], &board, 0).unwrap();
+    assert_ne!(v.category(), engine::Category::Straight);
+}
+
+#[test]
+fn iron_cross_row_or_column() {
+    // Row 0-2: 2c 3d 4h ; column 3,1,4: Ks 3d Kh. Hand A A K x: full house with the column
+    // (K K + A A K), not with the row.
+    let board = [(0, "2c"), (1, "3d"), (2, "4h"), (3, "Ks"), (4, "Kh")];
+    let v = shaped_value("iron_cross", &["As", "Ad", "Kc", "7d"], &board, 0).unwrap();
+    assert_eq!(v.category(), engine::Category::FullHouse);
+}
+
+#[test]
+fn spit_middle_holds_nine_including_each_discard() {
+    let g = game("spit");
+    let setup = HandSetup::simple(3, Chips(10_000));
+    let mut s = g.new_hand(&setup);
+    let deal = ["2c", "2d", "2h", "3c", "3d", "3h", "4c", "4d", "4h", "5c", "5d", "5h", "6c", "6d", "6h"];
+    for c in deal {
+        g.apply(&mut s, Action::Deal(card(c)));
+    }
+    // Each throws its first card: s1 2c, s2 2d, s0 2h.
+    for _ in 0..3 {
+        g.apply(&mut s, Action::Draw(1));
+    }
+    // Six more hidden cards top the middle up to nine.
+    for c in ["7c", "7d", "7h", "8c", "8d", "8h"] {
+        assert_eq!(g.to_act(&s), ToAct::Chance);
+        g.apply(&mut s, Action::Deal(card(c)));
+    }
+    assert_eq!(s.pool.len(), 9);
+    assert!(s.pool.contains(card("2c")) && s.pool.contains(card("2h")));
+    let obs = g.observe(&s, Seat(0));
+    assert!(obs.history.contains(&Event::Spat(Seat(1))));
+    // Flips come from the middle only.
+    for _ in 0..3 {
+        g.apply(&mut s, Action::CheckCall);
+    }
+    let mut legal = Vec::new();
+    g.legal_actions(&s, &mut legal);
+    assert_eq!(legal.len(), 9);
+}

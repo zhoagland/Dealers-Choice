@@ -192,6 +192,11 @@ showdown, burns not modelled. **D-HE-1** Hold'em variants play best five of hole
 | `pass_the_trash` | Pass the Trash | 7 down; pass 3/2/1 in the chooser's direction; throw 2; ordered reveals | hi/lo declare | D-PT-1/2/3 |
 | `man_or_mouse` | Man or Mouse | 7 down + 1 community; pass 2; In/Out | hi/lo declare | D-MM-1, `five_card_start` |
 | `game_43` | 43 | 4 down; In/Out for $1; 3 more | hi/lo declare | D-43-1 |
+| `elevator` | Elevator | 4 down; H of 7 flipped red set, black set, centre | 2o2 from one line, hi/lo declare | D-ELV-1, `two_at_a_time` |
+| `wheel_of_death` | Wheel of Death | 4 down; ring of 9 flipped in 3 spaced sets | 2o2 + 3 consecutive, hi/lo declare | `eight_cards`, `flip_one_at_a_time` |
+| `spit` | Spit | 5 down; throw 1 into a middle of 9; flip one per street | 2o2 + any 3 middle, hi/lo declare | D-SPIT-1/2/3, `three_at_a_time` |
+| `industrial_elevator` | Industrial Elevator | 5 down; column of 4 crossed by a row | 2+3 or 3+2 from one line, high | D-IE-1/2, `five_in_elevator` |
+| `iron_cross` | Iron Cross | $1 ante; 4 down; one bet; cross of 5 turned | best 5 of hole + row or column | D-IC-1/2 |
 
 ## Open questions
 - ~~G-1~~ Resolved: FTQ max 7 seats.

@@ -24,7 +24,7 @@ use engine::eval::{eval_partial_board, short_deck};
 use engine::game::sample_hidden_hands;
 use engine::pot::{Claim, Share, award_shares, build_pots, order_from_button};
 use engine::replay::replay_interleaved;
-use engine::view::{BoardView, CardSlot, PotView, SeatStatus, SeatView, TableView};
+use engine::view::{BoardLayout, BoardView, CardSlot, PotView, SeatStatus, SeatView, TableView};
 use engine::{
     ActionClass, Card, CardSet, Chips, DetRng, Game, GameLength, GameMeta, HandSetup, HandValue,
     HiddenSampler, IllegalAction, Rank, Seat, StakeModel, Suit, ToAct,
@@ -88,6 +88,14 @@ pub enum Step {
     Order,
     /// Each seat still in turns its next face-down card face up (in its chosen order).
     Reveal,
+    /// Deal board `board`'s cards at these positions (shaped boards).
+    Flip { board: u8, positions: &'static [u8] },
+    /// Spit: each seat still in throws one face-down card into the middle pile.
+    Spit,
+    /// Spit: deal hidden cards into the middle pile until it holds `total`.
+    FillPool { total: u8 },
+    /// Spit: turn `n` random cards of the middle pile face up onto board `board`.
+    FlipPool { board: u8, n: u8 },
     /// Red River (D-RR-1..3): one board card then a betting round, repeated while the card just
     /// dealt is red (and cards remain).
     RedRiver { board: u8 },
@@ -162,6 +170,12 @@ pub struct Script {
     pub swap_instead_of_fold: bool,
     /// The Bible's named variations, switched on by name in `Config::variants`.
     pub variants: Vec<Variant>,
+    /// Shaped boards: how the UI lays them out.
+    pub layout: BoardLayout,
+    /// Board positions per board (for empty slots in the view; 0 = grows as dealt).
+    pub positions: u8,
+    /// Groups of board positions a hand may use together. Empty = any board cards.
+    pub lines: Vec<Vec<u8>>,
 }
 
 /// A named rule variation: a change applied to the script.
@@ -339,6 +353,12 @@ enum Slot {
     Down(Seat),
     Up(Seat),
     Board(u8),
+    /// Board `b`, position `pos` (shaped boards).
+    BoardAt(u8, u8),
+    /// A hidden card into the middle pile (Spit).
+    Pool,
+    /// A random middle-pile card turned face up onto board `b`.
+    PoolFlip(u8),
 }
 
 #[derive(Clone, Debug)]
@@ -375,6 +395,12 @@ pub struct State {
     received: Vec<SmallVec<[Card; 8]>>,
     /// Everyone went Out: the hand is void and all chips go back.
     void: bool,
+    /// Board position of each card in `boards` (same order).
+    pub board_pos: Vec<SmallVec<[u8; 12]>>,
+    /// Spit's middle pile: face-down cards not yet turned.
+    pool: CardSet,
+    /// History indices of Spit throws.
+    spits: Vec<usize>,
     pub betting: Betting,
     queue: VecDeque<Slot>,
     deal_log: Vec<Slot>,
@@ -399,6 +425,14 @@ impl State {
 
     fn is_showdown(&self) -> bool {
         self.done && self.betting.live_count() > 1
+    }
+
+    /// Where the next dealt card comes from: the middle pile for Spit's flips, else the stock.
+    fn chance_pool(&self) -> CardSet {
+        match self.queue.front() {
+            Some(Slot::PoolFlip(_)) => self.pool,
+            _ => self.stock,
+        }
     }
 
     /// A seat's own cards (down then up).
@@ -544,6 +578,24 @@ impl Scripted {
                 s.red_betting = false;
                 s.queue.push_back(Slot::Board(board));
             }
+            Step::Flip { board, positions } => {
+                for &pos in positions {
+                    s.queue.push_back(Slot::BoardAt(board, pos));
+                }
+            }
+            Step::Spit => {
+                s.pending = s.live_from_left().into();
+            }
+            Step::FillPool { total } => {
+                for _ in s.pool.len()..total as usize {
+                    s.queue.push_back(Slot::Pool);
+                }
+            }
+            Step::FlipPool { board, n } => {
+                for _ in 0..n.min(s.pool.len() as u8) {
+                    s.queue.push_back(Slot::PoolFlip(board));
+                }
+            }
         }
     }
 
@@ -644,6 +696,7 @@ impl Scripted {
                 | Step::Pass(_)
                 | Step::InOut { .. }
                 | Step::Order
+                | Step::Spit
                 | Step::ChooseDirection => {
                     while s.pending.front().is_some_and(|&p| s.betting.is_folded(p)) {
                         s.pending.pop_front();
@@ -664,7 +717,10 @@ impl Scripted {
                     }
                     done
                 }
-                Step::Reveal => true,
+                Step::Reveal
+                | Step::Flip { .. }
+                | Step::FillPool { .. }
+                | Step::FlipPool { .. } => true,
                 Step::RedRiver { board } => {
                     if !s.red_betting {
                         let first = self.first_to_act(s);
@@ -722,6 +778,7 @@ impl Scripted {
             Some(Step::Discard { pairs: true, .. }) => {
                 out.extend((0..k / 2).map(|j| 0b11u8 << (2 * j)));
             }
+            Some(Step::Spit) => out.extend((0..k).map(|j| 1u8 << j)),
             _ => {}
         }
     }
@@ -752,11 +809,27 @@ impl Scripted {
         for p in s.live_from_left() {
             let own = s.own(p);
             for (k, rule) in shares.iter().enumerate() {
-                let board: &[Card] = s
-                    .boards
-                    .get(rule.board as usize)
-                    .map_or(&[], |b| b.as_slice());
-                out[k][p.index()] = hand::share_value(rule, &own, board, self.script.wild);
+                let b = rule.board as usize;
+                let board: &[Card] = s.boards.get(b).map_or(&[], |x| x.as_slice());
+                out[k][p.index()] = if self.script.lines.is_empty() {
+                    hand::share_value(rule, &own, board, self.script.wild)
+                } else {
+                    // Shaped board: the board cards must come from one line.
+                    let pos = &s.board_pos[b];
+                    self.script
+                        .lines
+                        .iter()
+                        .filter_map(|line| {
+                            let cards: SmallVec<[Card; 8]> = board
+                                .iter()
+                                .zip(pos)
+                                .filter(|(_, at)| line.contains(at))
+                                .map(|(&c, _)| c)
+                                .collect();
+                            hand::share_value(rule, &own, &cards, self.script.wild)
+                        })
+                        .max()
+                };
             }
         }
         out
@@ -915,6 +988,9 @@ impl Game for Scripted {
             sys_events: Vec::new(),
             received: vec![SmallVec::new(); n],
             void: false,
+            board_pos: vec![SmallVec::new(); self.script.boards as usize],
+            pool: CardSet::EMPTY,
+            spits: Vec::new(),
             betting,
             queue: VecDeque::new(),
             deal_log: Vec::new(),
@@ -945,7 +1021,7 @@ impl Game for Scripted {
     fn legal_actions(&self, s: &State, out: &mut Vec<Action>) {
         out.clear();
         match self.to_act(s) {
-            ToAct::Chance => out.extend(s.stock.iter().map(Action::Deal)),
+            ToAct::Chance => out.extend(s.chance_pool().iter().map(Action::Deal)),
             ToAct::Terminal => {}
             ToAct::Seat(p) => match self.script.steps[s.pc] {
                 Step::Declare => out.extend(DECLARE_OPTIONS.map(Action::Declare)),
@@ -964,7 +1040,7 @@ impl Game for Scripted {
                             .map(|m| Action::Pass(m as u8)),
                     );
                 }
-                Step::Draw { .. } | Step::Discard { .. } => {
+                Step::Draw { .. } | Step::Discard { .. } | Step::Spit => {
                     let mut masks = Vec::new();
                     self.throw_masks(s, p, &mut masks);
                     out.extend(masks.into_iter().map(Action::Draw));
@@ -984,7 +1060,7 @@ impl Game for Scripted {
 
     fn validate(&self, s: &State, a: Action) -> Result<(), IllegalAction> {
         match (self.to_act(s), a) {
-            (ToAct::Chance, Action::Deal(c)) if s.stock.contains(c) => Ok(()),
+            (ToAct::Chance, Action::Deal(c)) if s.chance_pool().contains(c) => Ok(()),
             (ToAct::Chance, _) => Err(IllegalAction("expected a deal of an undealt card".into())),
             (ToAct::Terminal, _) => Err(IllegalAction("the hand is over".into())),
             (ToAct::Seat(p), a) => match (self.script.steps[s.pc], a) {
@@ -1022,7 +1098,7 @@ impl Game for Scripted {
                 (Step::PairUp, _) => Err(IllegalAction(
                     "split your six cards into three pairs".into(),
                 )),
-                (Step::Draw { .. } | Step::Discard { .. }, Action::Draw(m)) => {
+                (Step::Draw { .. } | Step::Discard { .. } | Step::Spit, Action::Draw(m)) => {
                     let mut masks = Vec::new();
                     self.throw_masks(s, p, &mut masks);
                     if masks.contains(&m) {
@@ -1049,7 +1125,7 @@ impl Game for Scripted {
                         }))
                     }
                 }
-                (Step::Draw { .. } | Step::Discard { .. }, _) => {
+                (Step::Draw { .. } | Step::Discard { .. } | Step::Spit, _) => {
                     Err(IllegalAction("choose which cards to throw away".into()))
                 }
                 (_, Action::Swap(m)) => {
@@ -1072,12 +1148,27 @@ impl Game for Scripted {
     fn apply(&self, s: &mut State, a: Action) {
         let actor = match a {
             Action::Deal(c) => {
-                s.stock.remove(c);
                 let slot = s.queue.pop_front().expect("deal with no slot");
+                if let Slot::PoolFlip(_) = slot {
+                    s.pool.remove(c);
+                } else {
+                    s.stock.remove(c);
+                }
                 match slot {
                     Slot::Down(p) => s.down[p.index()].push(c),
                     Slot::Up(p) => s.up[p.index()].push(c),
-                    Slot::Board(b) => s.boards[b as usize].push(c),
+                    Slot::Board(b) | Slot::PoolFlip(b) => {
+                        let pos = s.boards[b as usize].len() as u8;
+                        s.boards[b as usize].push(c);
+                        s.board_pos[b as usize].push(pos);
+                    }
+                    Slot::BoardAt(b, pos) => {
+                        s.boards[b as usize].push(c);
+                        s.board_pos[b as usize].push(pos);
+                    }
+                    Slot::Pool => {
+                        s.pool.insert(c);
+                    }
                 }
                 s.deal_log.push(slot);
                 None
@@ -1094,6 +1185,14 @@ impl Game for Scripted {
                 for (i, &from) in PAIRINGS[k as usize].iter().enumerate() {
                     hand[i] = old[from as usize];
                 }
+                Some(p)
+            }
+            Action::Draw(m) if self.step(s) == Some(Step::Spit) => {
+                let p = s.pending.pop_front().expect("no one to spit");
+                s.spits.push(s.history.len());
+                let c = s.down[p.index()][m.trailing_zeros() as usize];
+                s.down[p.index()].remove(m.trailing_zeros() as usize);
+                s.pool.insert(c);
                 Some(p)
             }
             Action::Draw(m) => {
@@ -1163,17 +1262,14 @@ impl Game for Scripted {
 
     fn chance_outcomes(&self, s: &State, out: &mut Vec<(Action, f64)>) {
         out.clear();
-        let p = 1.0 / s.stock.len() as f64;
-        out.extend(s.stock.iter().map(|c| (Action::Deal(c), p)));
+        let from = s.chance_pool();
+        let p = 1.0 / from.len() as f64;
+        out.extend(from.iter().map(|c| (Action::Deal(c), p)));
     }
 
     fn sample_chance(&self, s: &State, rng: &mut DetRng) -> Action {
-        Action::Deal(
-            s.stock
-                .iter()
-                .nth(rng.random_range(0..s.stock.len()))
-                .unwrap(),
-        )
+        let from = s.chance_pool();
+        Action::Deal(from.iter().nth(rng.random_range(0..from.len())).unwrap())
     }
 
     fn payoffs(&self, s: &State) -> Vec<Chips> {
@@ -1209,12 +1305,21 @@ impl Game for Scripted {
                     }
                     Slot::Up(p) => Event::Up(p, c),
                     Slot::Board(b) => Event::Board(b, c),
+                    Slot::BoardAt(b, pos) => Event::BoardAt(b, pos, c),
+                    Slot::Pool => Event::PoolDeal,
+                    Slot::PoolFlip(b) => Event::PoolFlip(b, c),
                 },
                 (Some(p), Action::Declare(k)) => {
                     if p == seat {
                         own_choices.push(k);
                     }
                     Event::Declared(p)
+                }
+                (Some(p), Action::Draw(m)) if s.spits.contains(&i) => {
+                    if p == seat {
+                        own_choices.push(m);
+                    }
+                    Event::Spat(p)
                 }
                 (Some(p), Action::Draw(m)) => {
                     if p == seat {
@@ -1381,6 +1486,8 @@ impl Game for Scripted {
         let mut forced: Vec<(usize, Card)> = Vec::new();
         let mut choices: Vec<Action> = Vec::new();
         let mut pass_masks: Vec<Vec<u8>> = Vec::new();
+        // Spit: slots in the middle pile, not yet turned.
+        let mut pool_slots: Vec<usize> = Vec::new();
         let mut own_pass: Option<u8> = None;
         let mut own = obs.own_choices.iter();
         let mut own_cards = obs.own_dealt.iter();
@@ -1421,7 +1528,41 @@ impl Game for Scripted {
                     hand_slots[p.index()].push(id);
                     deals.push((DealRef::Slot(id), epoch));
                 }
-                Event::Up(_, c) | Event::Board(_, c) => deals.push((DealRef::Known(c), epoch)),
+                Event::Up(_, c) | Event::Board(_, c) | Event::BoardAt(_, _, c) => {
+                    deals.push((DealRef::Known(c), epoch))
+                }
+                Event::PoolDeal => {
+                    let id = slot_epoch.len();
+                    slot_epoch.push(epoch);
+                    slot_card.push(None);
+                    pool_slots.push(id);
+                    deals.push((DealRef::Slot(id), epoch));
+                }
+                Event::PoolFlip(_, c) => {
+                    let at = pool_slots
+                        .iter()
+                        .position(|&id| slot_card[id] == Some(c))
+                        .or_else(|| pool_slots.iter().position(|&id| slot_card[id].is_none()));
+                    if let Some(at) = at {
+                        let id = pool_slots.remove(at);
+                        slot_card[id] = Some(c);
+                    }
+                    deals.push((DealRef::Known(c), epoch));
+                }
+                Event::Spat(p) => {
+                    let hs = hand_slots[p.index()].clone();
+                    let mask = if p == me {
+                        *own.next().expect("own spit missing")
+                    } else {
+                        let mut order: Vec<usize> = (0..hs.len()).collect();
+                        order.sort_by_key(|&x| (rank_slot(hs[x], p, ei, false, &slot_card), x));
+                        1u8 << order[0]
+                    };
+                    let x = mask.trailing_zeros() as usize;
+                    pool_slots.push(hs[x]);
+                    hand_slots[p.index()].remove(x);
+                    choices.push(Action::Draw(mask));
+                }
                 Event::Reshuffle => epoch += 1,
                 Event::Declared(p) => {
                     if p == me {
@@ -1793,6 +1934,9 @@ impl Game for Scripted {
                 Event::HiddenDeal(_)
                 | Event::Up(..)
                 | Event::Board(..)
+                | Event::BoardAt(..)
+                | Event::PoolDeal
+                | Event::PoolFlip(..)
                 | Event::Reshuffle
                 | Event::InOutResolved(_)
                 | Event::Revealed(..) => {}
@@ -1818,6 +1962,7 @@ impl Game for Scripted {
                 | Event::Swapped(p, _)
                 | Event::Arranged(p)
                 | Event::Ordered(p)
+                | Event::Spat(p)
                 | Event::InOutChosen(p) => {
                     if p == me {
                         own_decl.next();
@@ -1955,10 +2100,20 @@ impl Game for Scripted {
             .iter()
             .enumerate()
             .map(|(k, cards)| {
-                BoardView::row(
-                    names.get(k).copied().unwrap_or("Board"),
-                    cards.iter().map(|&c| CardSlot::Up(c)).collect(),
-                )
+                let name = names.get(k).copied().unwrap_or("Board");
+                if self.script.positions == 0 {
+                    return BoardView::row(name, cards.iter().map(|&c| CardSlot::Up(c)).collect());
+                }
+                let mut slots = vec![CardSlot::Empty; self.script.positions as usize];
+                for (&c, &at) in cards.iter().zip(&s.board_pos[k]) {
+                    slots[at as usize] = CardSlot::Up(c);
+                }
+                BoardView {
+                    name: name.into(),
+                    layout: self.script.layout,
+                    slots,
+                    lines: self.script.lines.clone(),
+                }
             })
             .collect();
         let wilds = Rank::ALL
@@ -2103,6 +2258,14 @@ pub enum Event {
     Ordered(Seat),
     /// This seat turned this card face up.
     Revealed(Seat, Card),
+    /// A board card at a position (shaped boards).
+    BoardAt(u8, u8, Card),
+    /// Spit: this seat threw a card into the middle pile.
+    Spat(Seat),
+    /// Spit: a hidden card went into the middle pile.
+    PoolDeal,
+    /// Spit: a middle-pile card was turned face up onto a board.
+    PoolFlip(u8, Card),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

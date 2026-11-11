@@ -32,7 +32,7 @@ pub enum Ranking {
 }
 
 /// Which cards make a hand.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Build {
     /// Best five of the seat's cards plus the board, any mix (Hold'em, stud).
     Any,
@@ -40,10 +40,12 @@ pub enum Build {
     Exactly { hole: u8, board: u8 },
     /// The seat's own cards only (draw games, Badugi, spade halves).
     Own,
+    /// Any of these (own, board) splits of five cards (Industrial Elevator: 2+3 or 3+2).
+    Combos(&'static [(u8, u8)]),
 }
 
 /// One share of the pot.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct ShareRule {
     pub name: &'static str,
     pub ranking: Ranking,
@@ -113,6 +115,26 @@ fn best_of(r: Ranking, cards: &[Card], wild: CardSet) -> Option<HandValue> {
     best
 }
 
+/// Best value using exactly `hole` own cards and `nb` board cards.
+fn exactly(
+    r: Ranking,
+    own: &[Card],
+    board: &[Card],
+    hole: u8,
+    nb: u8,
+    wild: CardSet,
+) -> Option<HandValue> {
+    let mut best = None;
+    subsets(own, hole as usize, |h| {
+        subsets(board, nb as usize, |b| {
+            if let Some(v) = five(r, h.union(b), wild) {
+                best = best.max(Some(v));
+            }
+        });
+    });
+    best
+}
+
 /// The seat's value for one share. `own` = the seat's cards (down and up), `board` = the
 /// share's board. `None` when no hand can be made.
 pub fn share_value(
@@ -150,17 +172,11 @@ pub fn share_value(
                 let all: Vec<Card> = own.iter().chain(board).copied().collect();
                 best_of(r, &all, wild)
             }
-            Build::Exactly { hole, board: nb } => {
-                let mut best = None;
-                subsets(own, hole as usize, |h| {
-                    subsets(board, nb as usize, |b| {
-                        if let Some(v) = five(r, h.union(b), wild) {
-                            best = best.max(Some(v));
-                        }
-                    });
-                });
-                best
-            }
+            Build::Exactly { hole, board: nb } => exactly(r, own, board, hole, nb, wild),
+            Build::Combos(splits) => splits
+                .iter()
+                .filter_map(|&(h, b)| exactly(r, own, board, h, b, wild))
+                .max(),
         },
     }
 }
