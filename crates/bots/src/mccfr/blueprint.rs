@@ -73,17 +73,18 @@ pub struct BlueprintFile<O, A> {
 
 impl<G: Game> Blueprint<G> {
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut entries: Vec<(Vec<u8>, (G::Observation, Vec<(G::Action, f64)>))> = self
+        let mut entries: Vec<_> = self
             .table
             .iter()
-            .map(|(o, d)| (postcard::to_allocvec(o).unwrap(), (o.clone(), d.to_vec())))
+            .map(|(o, d)| (o.clone(), d.to_vec()))
             .collect();
-        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        // `sort_by_cached_key` encodes each observation once, not once per comparison.
+        entries.sort_by_cached_key(|(o, _)| postcard::to_allocvec(o).unwrap());
         let file = BlueprintFile {
             game_id: self.game_id.clone(),
             game_version: self.game_version,
             iterations: self.iterations,
-            entries: entries.into_iter().map(|(_, e)| e).collect(),
+            entries,
         };
         postcard::to_allocvec(&file).expect("blueprints always serialize")
     }

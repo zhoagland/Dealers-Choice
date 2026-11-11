@@ -13,6 +13,7 @@ license = "GPL-3.0-or-later"
 clap = { version = "4", features = ["derive"] }
 postcard = { version = "1", features = ["alloc"] }
 rand = "0.9"
+ratatui = "0.29"
 rusqlite = { version = "0.37", features = ["bundled"] }
 rayon = "1"
 rand_chacha = "0.9"
