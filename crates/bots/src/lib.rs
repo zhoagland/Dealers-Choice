@@ -1,6 +1,7 @@
 //! Bots. Every bot sees only its seat's `Observation` and the public list of legal actions;
 //! none ever touches a game's full `State`. Plan: `docs/tech/bots.md`.
 
+pub mod coach;
 pub mod harness;
 pub mod ismcts;
 pub mod mccfr;

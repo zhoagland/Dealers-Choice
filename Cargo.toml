@@ -10,6 +10,7 @@ license = "GPL-3.0-or-later"
 
 # Pin dependency versions once here; crates opt in with `dep = { workspace = true }`.
 [workspace.dependencies]
+clap = { version = "4", features = ["derive"] }
 rand = "0.9"
 rand_chacha = "0.9"
 serde = { version = "1", features = ["derive"] }

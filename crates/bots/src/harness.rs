@@ -43,10 +43,14 @@ pub fn play_hand<G: Game>(
                 game.legal_actions(&state, &mut legal);
                 let obs = game.observe(&state, p);
                 let i = p.index();
-                let a = seats[i].act(game, &obs, &legal, &mut seat_rngs[i]);
-                if let Err(e) = game.validate(&state, a) {
-                    panic!("{} in {p} chose {a:?}: {e}", seats[i].name());
-                }
+                let a = loop {
+                    let a = seats[i].act(game, &obs, &legal, &mut seat_rngs[i]);
+                    match game.validate(&state, a) {
+                        Ok(()) => break a,
+                        Err(e) if seats[i].on_rejected(&e) => continue,
+                        Err(e) => panic!("{} in {p} chose {a:?}: {e}", seats[i].name()),
+                    }
+                };
                 decisions += 1;
                 a
             }
@@ -54,9 +58,13 @@ pub fn play_hand<G: Game>(
         game.apply(&mut state, action);
         actions.push(action);
     }
+    let payoffs = game.payoffs(&state);
+    for (policy, &p) in seats.iter_mut().zip(&payoffs) {
+        policy.on_hand_end(p);
+    }
     HandResult {
         actions,
-        payoffs: game.payoffs(&state),
+        payoffs,
         decisions,
     }
 }
