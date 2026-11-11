@@ -13,4 +13,5 @@ license = "GPL-3.0-or-later"
 rand = "0.9"
 rand_chacha = "0.9"
 serde = { version = "1", features = ["derive"] }
+toml = "0.9"
 smallvec = { version = "1", features = ["serde", "union", "const_generics"] }
