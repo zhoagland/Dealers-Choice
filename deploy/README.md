@@ -1,7 +1,7 @@
 # Deploying Dealers Choice (web)
 
-Status: the web server (`dc-server`) is planned, not built yet (`docs/tech/web.md`, milestones W1–W5). Part 1 can
-be done now; it gives you the values the server will need. Parts 2–3 are filled in when W5 lands.
+Status: built (`crates/server`, `web/`; `docs/tech/web.md`). Part 1 creates the Discord application, Part 2 puts
+the app on your server, Part 3 covers updates and backups, and the last part turns on play inside Discord.
 
 Plan decisions this guide follows: Discord sign-in only, only members of your Discord server may sign in
 (D-WEB-2), a Linux x86-64 server with Docker Compose, HTTPS by a bundled Caddy (OQ-11).
@@ -42,21 +42,59 @@ ADMIN_DISCORD_IDS=<your user id>[,<other admin id>]
 
 If the secret ever leaks: Developer Portal → OAuth2 → **Reset Secret**, update `.env`, restart the server.
 
-## Part 2 — Server and DNS (fill in at W5)
+## Part 2 — Server and DNS
 
-- Point an `A` record for your domain at the server's public IP; open ports 80 and 443 (Caddy needs both for
-  Let's Encrypt).
-- Install Docker Engine + the Compose plugin.
-- `git clone` this repo (or copy `deploy/`), `cp deploy/.env.example deploy/.env`, fill in the values from
-  Part 1, then `docker compose -f deploy/docker-compose.yml up -d`.
-- Check `https://<your-domain>/healthz`, then sign in.
+You need: a Linux x86-64 server with a public IP, a domain you control, and Docker.
 
-## Part 3 — Updating and backups (fill in at W5)
+1. **DNS:** add an `A` record for your domain (e.g. `poker.example.com`) pointing at the server's IP. Open ports
+   80 and 443 in the server's firewall; Caddy needs both to get the HTTPS certificate.
+2. **Docker:** install Docker Engine and the Compose plugin (<https://docs.docker.com/engine/install/>). Check
+   with `docker compose version`.
+3. **Code:** `git clone <this repo> dealers-choice && cd dealers-choice`.
+4. **Settings:** `cp deploy/.env.example deploy/.env`, then edit `deploy/.env`: set `DOMAIN` and `PUBLIC_URL` to
+   your domain and paste the four values from Part 1. Keep `DEV_MODE=0`. The server refuses to start without the
+   Discord values and `ALLOWED_GUILD_ID` (D-WEB-2).
+5. **Start:** `docker compose -f deploy/docker-compose.yml up -d --build`. The first build takes several
+   minutes (it compiles the Rust server and the web app).
+6. **Check:** open `https://<your-domain>/healthz` (it says `ok`), then `https://<your-domain>/`, sign in with
+   Discord, create a table and copy its invite link into your Discord channel.
+7. Logs: `docker compose -f deploy/docker-compose.yml logs -f app`.
 
-- Update: `docker compose pull && docker compose up -d` (waits for hands in progress, max 5 min).
-- Backups: nightly SQLite snapshots in `data/backups/` (7 kept); restoring one is in the handbook.
+Everyone starts with $100 of play money. As an admin (`ADMIN_DISCORD_IDS`) you get an **Admin** link in the lobby
+to deposit or reset bankrolls. The **settle** tab at a table shows each player's net result over the last 24
+hours, so the group can settle up outside the app; the app never moves real money.
 
-## Optional — Play inside Discord (Activity)
+### Trying it on your own computer first
 
-If the group wants to launch tables from a Discord voice channel, the same application can also be an
-**Activity**. This is a proposal (`docs/tech/web.md` §13), not part of v1; nothing to set up yet.
+No Discord needed: `DEV_MODE=1 cargo run -p server` in one terminal, `cd web && npm install && npm run dev` in
+another, then open the address Vite prints and sign in by name (open a private window for a second player).
+Or build once (`cd web && npm run build`) and open <http://localhost:8080> from `DEV_MODE=1 cargo run -p server`.
+
+## Part 3 — Updates and backups
+
+- **Update:** `git pull && docker compose -f deploy/docker-compose.yml up -d --build`. Restarting stops the
+  tables; when the server comes back, each table reopens and any game that was interrupted is paid back to the
+  start of the interrupted hand (table-stake stacks and carried pots go back to the players, D-WEB-6). Update
+  between games if you can.
+- **Backups:** the server writes a snapshot of its database every night to `/data/backups` inside the `dc-data`
+  volume and keeps the newest 7. To copy them out:
+  `docker compose -f deploy/docker-compose.yml cp app:/data/backups ./backups`.
+- **Restore a backup:** stop the app (`docker compose -f deploy/docker-compose.yml stop app`), copy the backup
+  over the live database (`docker compose -f deploy/docker-compose.yml cp ./backups/dc-dayNNNNNN.sqlite
+  app:/data/dc.sqlite`), then start it again (`... start app`).
+- If the client secret leaks, reset it (Part 1) and restart the app.
+
+## Part 4 — Play inside Discord (Activity, optional)
+
+The same app runs as a Discord **Activity**: people in a voice channel press the Activities (rocket) button,
+pick Dealers Choice, and everyone in that call lands at the same table (`docs/tech/web.md` §13).
+
+1. Developer Portal → your application → **Activities → Settings**: turn on **Enable Activities**, and enable
+   the platforms you want (desktop, mobile).
+2. **Activities → URL Mappings**: add the root mapping `/` → `<your-domain>` (no `https://`).
+3. **OAuth2 → Redirects** must have at least one entry (Part 1's is enough).
+4. **Installation**: make sure the app can be added to your server (Guild Install), and add it to your server.
+5. Join a voice channel, open Activities, choose the app. The first time, Discord asks each person to authorize.
+
+Inside Discord the session travels as a bearer token rather than a cookie (Discord's iframe blocks third-party
+cookies), and the lobby is skipped: one table per Activity instance, hosted by whoever opened it.

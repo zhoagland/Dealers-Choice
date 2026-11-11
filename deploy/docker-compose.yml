@@ -1,0 +1,40 @@
+# Dealers Choice on your own server (deploy/README.md). Caddy gets HTTPS certificates for
+# $DOMAIN automatically and forwards to the app. Secrets live only in deploy/.env.
+#
+#   cp deploy/.env.example deploy/.env   # then fill it in
+#   docker compose -f deploy/docker-compose.yml up -d --build
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: dealers-choice:latest
+    env_file: .env
+    environment:
+      DC_DATA_ROOT: /data
+      BIND_ADDR: 0.0.0.0:8080
+    volumes:
+      - dc-data:/data
+    restart: unless-stopped
+    # Tables in progress are refunded to the start of the interrupted hand on restart (D-WEB-6).
+    stop_grace_period: 30s
+
+  caddy:
+    image: caddy:2
+    depends_on: [app]
+    env_file: .env
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+
+volumes:
+  dc-data:
+  caddy-data:
+  caddy-config:
