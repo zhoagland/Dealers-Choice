@@ -849,3 +849,61 @@ fn tempest_ante_rises_until_a_showdown_and_only_shoves_or_folds() {
         Chips(100 + 100 + 200)
     );
 }
+
+#[test]
+fn numbers_conformance() {
+    check_conformance(
+        &game("numbers"),
+        &Conformance {
+            hands: 60,
+            seat_counts: vec![2, 3, 5],
+            determinizations: 2,
+            ..Conformance::default()
+        },
+    );
+}
+
+#[test]
+fn seven_27_scores_closest_without_going_over() {
+    let r = |half| ShareRule {
+        name: "t",
+        ranking: Ranking::Target {
+            half,
+            bust_ok: false,
+        },
+        build: Build::Own,
+        board: 0,
+    };
+    let v = |cards: &str, half| {
+        let own: Vec<Card> = cards.split_whitespace().map(card).collect();
+        hand::share_value(&r(half), &own, &[], CardSet::EMPTY)
+    };
+    // 7 target (14 half points): K + 6 = 6.5 beats 5 + A = 6 (ace as 1; 16 would bust).
+    assert!(v("Kc 6d", 14) > v("5c Ad", 14));
+    // 27 target: A + A + 5 = 27 exactly (11 + 11 + 5).
+    assert_eq!(v("Ac Ad 5h", 54).unwrap().0, 1_000);
+    // Bust on 7 still makes a 27 hand.
+    assert_eq!(v("9c 8d", 14), None);
+    assert!(v("9c 8d", 54).is_some());
+}
+
+#[test]
+fn numbers_throws_neighbours_and_gin_scoops() {
+    let g = game("numbers");
+    let setup = HandSetup::simple(2, Chips(10_000));
+    let mut s = g.new_hand(&setup);
+    // s1: all 7s and 8s and a 6 (gins on a 7); s0: kings and queens.
+    let deal = [
+        "7c", "Kc", "7d", "Kd", "8c", "Kh", "8d", "Qc", "6c", "Qd", "6d", "Qh",
+    ];
+    for c in deal {
+        g.apply(&mut s, Action::Deal(card(c)));
+    }
+    g.apply(&mut s, Action::CheckCall);
+    g.apply(&mut s, Action::CheckCall);
+    g.apply(&mut s, Action::Deal(card("7h")));
+    assert_eq!(s.gin, 0b10, "s1 threw away every card");
+    assert_eq!(g.to_act(&s), ToAct::Terminal);
+    // s1 scoops the $2 dealer ante (posted by s0, the chooser).
+    assert_eq!(g.payoffs(&s), vec![Chips(-200), Chips(200)]);
+}

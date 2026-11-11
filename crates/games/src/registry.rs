@@ -69,6 +69,9 @@ pub const GAME_IDS: &[&str] = &[
     "three_five_seven",
     "scare_a_moosh",
     "holdem_tempest",
+    "seven_27",
+    "five_21",
+    "numbers",
 ];
 
 /// Build game `id` from `config` (a TOML table of that game's `Config`; `None` = defaults)

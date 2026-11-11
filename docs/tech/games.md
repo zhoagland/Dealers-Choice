@@ -212,6 +212,9 @@ showdown, burns not modelled. **D-HE-1** Hold'em variants play best five of hole
 | `three_five_seven` | 3-5-7 | cycles of 3/5/7 cards (3s/5s/7s wild), play or drop each round | strikes and stuns; 3 strikes take the pot | D-357-1 (owner), D-357-2/3 |
 | `scare_a_moosh` | Scare-a-moosh | name the game and price; In/Out; draw; bet | named: high, low, high/low numbers | D-SAM-1..4, `stay_in` |
 | `holdem_tempest` | Tempest Hold'em | rising antes, $2 Giant Blind, all-in or fold, $20 cap; until a showdown | high | D-TEM-1 (owner) |
+| `seven_27` | 7/27 | 1 down 1 up; hit/stand rounds with betting until all stand; declare 7 / 27 / Both | closest without going over | D-727-1/2/3, `bluff_bust` |
+| `five_21` | 5.5/21.5 | as 7/27 with targets 5.5 and 21.5 | closest without going over | D-727-1/2/3, `bluff_bust` |
+| `numbers` | Numbers | 6 down; 4 middle flips throw away matching and neighbouring ranks; gin scoops | high/low card totals, declare | D-NUM-1/2/3, `five_cards`, `seven_cards` |
 
 ## Open questions
 - ~~G-1~~ Resolved: FTQ max 7 seats.

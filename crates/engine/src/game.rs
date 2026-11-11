@@ -544,7 +544,23 @@ pub fn sample_hidden_hands(
         return hands;
     }
     // Ranges incompatible with the known cards: ignore them rather than loop forever.
-    sample_hidden_hands(&mut UniformSampler, requests, available, rng)
+    let mut hands = Vec::with_capacity(requests.len());
+    let mut remaining = available;
+    for &(seat, n) in requests {
+        let cards = UniformSampler
+            .sample_private(seat, n, remaining, rng)
+            .unwrap_or_else(|| {
+                panic!(
+                    "sample_hidden_hands: {seat} needs {n} cards, only {} available",
+                    remaining.len()
+                )
+            });
+        for &c in &cards {
+            remaining.remove(c);
+        }
+        hands.push(cards);
+    }
+    hands
 }
 
 #[cfg(test)]

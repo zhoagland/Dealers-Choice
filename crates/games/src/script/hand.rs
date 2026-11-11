@@ -36,6 +36,9 @@ pub enum Ranking {
     NumbersHigh,
     /// Numbers: the lowest card total (aces 1).
     NumbersLow,
+    /// 7/27: closest to `half` half-points without going over (pictures ½, aces 1 or 11).
+    /// `bust_ok`: a bust still makes a (worst) hand, so it wins a share nobody else contests.
+    Target { half: u16, bust_ok: bool },
 }
 
 /// Blackjack-style card value in half points: 2-10 face value, pictures ½, aces 1 or 11.
@@ -152,7 +155,8 @@ fn five(r: Ranking, cards: CardSet, wild: CardSet) -> Option<HandValue> {
         | Ranking::HighCard
         | Ranking::ThreeCard
         | Ranking::NumbersHigh
-        | Ranking::NumbersLow => unreachable!(),
+        | Ranking::NumbersLow
+        | Ranking::Target { .. } => unreachable!(),
     })
 }
 
@@ -225,6 +229,25 @@ pub fn share_value(
             .max()
             .map(HandValue),
         Ranking::ThreeCard => three_card(own, wild),
+        Ranking::Target { half, bust_ok } => {
+            let cards: Vec<Card> = own.iter().copied().filter(|c| !c.is_joker()).collect();
+            let low: u32 = cards.iter().map(|&c| number_value(c, false)).sum();
+            let aces = cards.iter().filter(|c| c.rank() == Rank::Ace).count() as u32;
+            // Count aces as 11 while that stays on or under the target.
+            let mut best = low;
+            for _ in 0..aces {
+                if best + 20 <= half as u32 {
+                    best += 20;
+                }
+            }
+            if best <= half as u32 {
+                Some(HandValue(1_000 - (half as u32 - best)))
+            } else if bust_ok {
+                Some(HandValue(0))
+            } else {
+                None
+            }
+        }
         Ranking::NumbersHigh => Some(HandValue(
             own.iter()
                 .filter(|c| !c.is_joker())

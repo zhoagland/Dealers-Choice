@@ -72,6 +72,10 @@ pub const SCRIPTED_IDS: &[&str] = &[
     "three_five_seven",
     "scare_a_moosh",
     "holdem_tempest",
+    // G9 Numbers
+    "seven_27",
+    "five_21",
+    "numbers",
 ];
 
 /// The script for `id`.
@@ -178,6 +182,23 @@ pub fn script(id: &str) -> Option<Script> {
         "three_five_seven" => three_five_seven(),
         "scare_a_moosh" => scare_a_moosh(),
         "holdem_tempest" => tempest(),
+        "seven_27" => targets(
+            "seven_27",
+            "7/27",
+            "Poker Bible §7/27",
+            14,
+            54,
+            ["7", "27", "Both"],
+        ),
+        "five_21" => targets(
+            "five_21",
+            "5.5/21.5",
+            "Poker Bible §5.5/21.5",
+            11,
+            43,
+            ["5.5", "21.5", "Both"],
+        ),
+        "numbers" => numbers(),
         _ => return None,
     })
 }
@@ -1512,5 +1533,101 @@ fn tempest() -> Script {
             "Tempest Hold'em",
             "Poker Bible §Tempest Hold'em",
         )
+    }
+}
+
+// ----- G9 Numbers -----------------------------------------------------------------------------
+
+/// 7/27 and 5.5/21.5: card values 2-10 face value, pictures ½, aces 1 or 11. One card down and
+/// one up; a betting round; then rounds of hit or stand (hits face up) with a betting round after
+/// each, until a round in which everyone stands; then declare (low target, high target, both).
+/// Targets are in half points (7 = 14, 27 = 54, 5.5 = 11, 21.5 = 43).
+/// - **D-727-1** closest *without going over* wins each target; a bust on one target can still win
+///   the other.
+/// - **D-727-2** "Both" follows the house Both rule.
+/// - **D-727-3** at most 10 hit rounds.
+/// - Variation `bluff_bust` (the Bible's): a busted hand can still win a target nobody else
+///   declared.
+fn targets(
+    id: &'static str,
+    name: &'static str,
+    rules_ref: &'static str,
+    low: u16,
+    high: u16,
+    names: [&'static str; 3],
+) -> Script {
+    let share = |nm: &'static str, half: u16| ShareRule {
+        name: nm,
+        ranking: Ranking::Target {
+            half,
+            bust_ok: false,
+        },
+        build: Build::Own,
+        board: 0,
+    };
+    Script {
+        steps: vec![Down(1), Up(1), Bet, HitRounds { cap: 10 }, Declare],
+        max_seats: 7,
+        shares: vec![share(names[0], low), share(names[1], high)],
+        declare: Some(DeclareKind::Custom(names)),
+        boards: 0,
+        variants: vec![Variant {
+            name: "bluff_bust",
+            apply: |s| {
+                for sh in s.shares.iter_mut() {
+                    if let Ranking::Target { bust_ok, .. } = &mut sh.ranking {
+                        *bust_ok = true;
+                    }
+                }
+            },
+        }],
+        ..base(id, name, rules_ref)
+    }
+}
+
+/// Numbers: 6 cards each and 4 middle cards turned one at a time, with a betting round before
+/// the first and after each. Each turned card makes every player throw away (face up) its cards
+/// of that rank and the ranks next to it; an empty hand ("gin") scoops the pot at once. Then
+/// declare High / Low / Both numbers (card totals: aces 11 for high, 1 for low).
+/// - **D-NUM-1** a turned rank removes that rank and its neighbours (ace is next to 2 and King).
+/// - **D-NUM-2** a turned card of a rank already turned is replaced.
+/// - **D-NUM-3** several gins on one card split the pot.
+/// - Variations `five_cards` and `seven_cards` (the Bible's "5-7 cards").
+fn numbers() -> Script {
+    let mut steps = vec![Down(6), Bet];
+    for _ in 0..4 {
+        steps.extend([NumbersFlip, Bet]);
+    }
+    steps.push(Declare);
+    Script {
+        steps,
+        max_seats: 7,
+        shares: vec![
+            ShareRule {
+                name: "High numbers",
+                ranking: Ranking::NumbersHigh,
+                build: Build::Own,
+                board: 0,
+            },
+            ShareRule {
+                name: "Low numbers",
+                ranking: Ranking::NumbersLow,
+                build: Build::Own,
+                board: 0,
+            },
+        ],
+        declare: Some(DeclareKind::HiLo),
+        layout: BoardLayout::Middle,
+        variants: vec![
+            Variant {
+                name: "five_cards",
+                apply: |s| s.steps[0] = Down(5),
+            },
+            Variant {
+                name: "seven_cards",
+                apply: |s| s.steps[0] = Down(7),
+            },
+        ],
+        ..base("numbers", "Numbers (hi/lo declare)", "Poker Bible §Numbers")
     }
 }

@@ -119,6 +119,13 @@ pub enum Step {
     /// Scare-a-moosh: from the dealer's left, each player may name the game and its price
     /// (up to `max_units` × 50¢) or pass it on.
     NameGame { max_units: u8 },
+    /// 7/27: rounds of hit-or-stand (hits face up) with betting after each, until a round in
+    /// which everyone stands (at most `cap` rounds).
+    HitRounds { cap: u8 },
+    /// Numbers: turn a middle card; a rank already turned is replaced (D-NUM-2); every player
+    /// throws away its cards of that rank and the ranks next to it (D-NUM-1); an empty hand
+    /// scoops the pot.
+    NumbersFlip,
     /// Red River (D-RR-1..3): one board card then a betting round, repeated while the card just
     /// dealt is red (and cards remain).
     RedRiver { board: u8 },
@@ -150,6 +157,8 @@ pub enum DeclareKind {
     HiLo,
     /// Top / Bottom / Both boards: share 0 = top, share 1 = bottom.
     Boards,
+    /// Named shares (7/27: "7", "27", "Both").
+    Custom([&'static str; 3]),
 }
 
 impl DeclareKind {
@@ -157,6 +166,7 @@ impl DeclareKind {
         match self {
             DeclareKind::HiLo => ["High", "Low", "Both"],
             DeclareKind::Boards => ["Top", "Bottom", "Both"],
+            DeclareKind::Custom(names) => names,
         }
     }
     fn claim(k: u8) -> Claim {
@@ -537,6 +547,12 @@ pub struct State {
     named: Option<(Seat, u8, u8)>,
     /// Seats that went Out this hand.
     outs: u16,
+    /// 7/27: hit rounds done, whether anyone hit this round, and whether it's betting.
+    hit_rounds: u8,
+    hit_any: bool,
+    hit_betting: bool,
+    /// Numbers: seats that threw away their whole hand (they scoop).
+    pub gin: u16,
     pub betting: Betting,
     queue: VecDeque<Slot>,
     deal_log: Vec<Slot>,
@@ -784,6 +800,64 @@ impl Scripted {
                     }
                 }
             }
+            Step::HitRounds { .. } => {
+                s.hit_rounds = 0;
+                self.start_hit_round(s);
+            }
+            Step::NumbersFlip => s.queue.push_back(Slot::Board(0)),
+        }
+    }
+
+    /// 7/27: offer everyone still in a card.
+    fn start_hit_round(&self, s: &mut State) {
+        s.hit_any = false;
+        s.hit_betting = false;
+        s.prompts = s
+            .live_from_left()
+            .into_iter()
+            .map(|p| (p, Prompt::Take))
+            .collect();
+    }
+
+    /// Numbers: the middle card just turned. A rank already turned is replaced; otherwise every
+    /// hand throws away that rank and its neighbours (ace next to two and king).
+    fn numbers_flip(&self, s: &mut State, c: Card) {
+        let board = &s.boards[0];
+        let dup = board[..board.len() - 1]
+            .iter()
+            .any(|b| b.rank() == c.rank());
+        if dup {
+            s.boards[0].pop();
+            s.board_pos[0].pop();
+            s.muck.insert(c);
+            s.queue.push_front(Slot::Board(0));
+            return;
+        }
+        let r = c.rank() as i32;
+        let near = |x: Rank| {
+            let d = (x as i32 - r).rem_euclid(13);
+            d == 0 || d == 1 || d == 12
+        };
+        for p in s.live_from_left() {
+            let hand = &mut s.down[p.index()];
+            let mut kept = SmallVec::new();
+            for &x in hand.iter() {
+                if !x.is_joker() && near(x.rank()) {
+                    s.sys_events
+                        .push((s.history.len() + 1, Event::Discarded(p, x)));
+                    s.muck.insert(x);
+                } else {
+                    kept.push(x);
+                }
+            }
+            *hand = kept;
+            if hand.is_empty() {
+                s.gin |= 1 << p.0;
+            }
+        }
+        if s.gin != 0 {
+            s.done = true;
+            s.queue.clear();
         }
     }
 
@@ -1068,6 +1142,30 @@ impl Scripted {
                 | Step::FillPool { .. }
                 | Step::FlipPool { .. } => true,
                 Step::UpOrDown | Step::BuyCard { .. } | Step::DummyIfLone { .. } => true,
+                Step::NumbersFlip => true,
+                Step::HitRounds { cap } => {
+                    if !s.hit_betting {
+                        if !s.hit_any {
+                            true // everyone stood
+                        } else {
+                            let first = self.first_to_act(s);
+                            s.betting.start_street(s.streets, first);
+                            s.streets += 1;
+                            s.hit_betting = true;
+                            continue;
+                        }
+                    } else if s.betting.to_act().is_some() {
+                        false
+                    } else {
+                        s.hit_rounds += 1;
+                        if s.hit_rounds >= cap {
+                            true
+                        } else {
+                            self.start_hit_round(s);
+                            continue;
+                        }
+                    }
+                }
                 Step::PlayRound { wild, three } => {
                     if !s.pending.is_empty() {
                         return;
@@ -1338,6 +1436,19 @@ impl Scripted {
     }
 
     fn winnings(&self, s: &State) -> Vec<Chips> {
+        if s.gin != 0 {
+            // Numbers: an empty hand scoops (several split it).
+            let n = s.n() as usize;
+            let mut out = vec![Chips::ZERO; n];
+            let total = s.betting.pot();
+            split(
+                total,
+                s.gin,
+                &order_from_button(s.setup.button, s.n()),
+                &mut out,
+            );
+            return out;
+        }
         if s.void {
             // Everyone went Out: every chip goes back.
             return s.betting.contributed().to_vec();
@@ -1733,6 +1844,10 @@ impl Game for Scripted {
             plays: vec![None; n],
             named: None,
             outs: 0,
+            hit_rounds: 0,
+            hit_any: false,
+            hit_betting: false,
+            gin: 0,
             betting,
             queue: VecDeque::new(),
             deal_log: Vec::new(),
@@ -1756,7 +1871,10 @@ impl Game for Scripted {
             return ToAct::Seat(p);
         }
         match self.script.steps[s.pc] {
-            Step::Bet | Step::RedRiver { .. } | Step::TakeRounds { .. } => {
+            Step::Bet
+            | Step::RedRiver { .. }
+            | Step::TakeRounds { .. }
+            | Step::HitRounds { .. } => {
                 ToAct::Seat(s.betting.to_act().expect("advance left a closed street"))
             }
             _ => ToAct::Seat(*s.pending.front().expect("step with nobody pending")),
@@ -1996,6 +2114,9 @@ impl Game for Scripted {
                     }
                     Slot::Middle => s.middle.push(c),
                 }
+                if matches!(slot, Slot::Board(0)) && self.step(s) == Some(Step::NumbersFlip) {
+                    self.numbers_flip(s, c);
+                }
                 if let Slot::Up(p) = slot {
                     if self.script.up_joker_kills && c.is_joker() {
                         s.betting.fold_out(p);
@@ -2076,6 +2197,12 @@ impl Game for Scripted {
                             s.queue.push_front(Slot::Up(p));
                         } else {
                             s.up[p.index()].push(c);
+                        }
+                    }
+                    Prompt::Take if matches!(self.script.steps[s.pc], Step::HitRounds { .. }) => {
+                        if k == 1 {
+                            s.hit_any = true;
+                            s.queue.push_back(Slot::Up(p));
                         }
                     }
                     Prompt::Take => {
@@ -2496,6 +2623,17 @@ impl Game for Scripted {
                     };
                     choices.push(Action::Play(x));
                 }
+                Event::Discarded(p, c) => {
+                    let hs = &mut hand_slots[p.index()];
+                    let at = hs
+                        .iter()
+                        .position(|&id| slot_card[id] == Some(c))
+                        .or_else(|| hs.iter().position(|&id| slot_card[id].is_none()));
+                    if let Some(at) = at {
+                        let id = hs.remove(at);
+                        slot_card[id] = Some(c);
+                    }
+                }
                 Event::Showed(p, j, c) => {
                     if let Some(&id) = hand_slots[p.index()].get(j as usize)
                         && slot_card[id].is_none()
@@ -2809,8 +2947,66 @@ impl Game for Scripted {
                     )
                 })
                 .collect();
-            let sampled =
-                sample_hidden_hands(sampler, &unknown_counts, self.deck().difference(known), rng);
+            // Numbers: a seat still in when a card was turned can't hold that rank or its
+            // neighbours (it would have thrown them away), so its hidden cards avoid them.
+            let mut forbidden = vec![CardSet::EMPTY; n];
+            if self.script.steps.contains(&Step::NumbersFlip) {
+                let mut out = 0u16;
+                for e in &obs.history {
+                    match *e {
+                        Event::Bet(p, BetAction::Fold) => out |= 1 << p.0,
+                        Event::Board(0, f) => {
+                            let near: CardSet = self
+                                .deck()
+                                .iter()
+                                .filter(|c| {
+                                    let d = (c.rank() as i32 - f.rank() as i32).rem_euclid(13);
+                                    d == 0 || d == 1 || d == 12
+                                })
+                                .collect();
+                            for (i, fb) in forbidden.iter_mut().enumerate() {
+                                if out & (1 << i) == 0 {
+                                    *fb = fb.union(near);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            let sampled: Vec<engine::CardVec> = if forbidden.iter().all(|f| f.is_empty()) {
+                sample_hidden_hands(sampler, &unknown_counts, self.deck().difference(known), rng)
+            } else {
+                // Most constrained seats first; retry with a fresh shuffle if a seat runs short
+                // (a valid assignment always exists: the real one).
+                let base = self.deck().difference(known);
+                let mut order: Vec<usize> = (0..unknown_counts.len()).collect();
+                order.sort_by_key(|&i| {
+                    let (p, k) = unknown_counts[i];
+                    base.difference(forbidden[p.index()]).len() as i64 - k as i64
+                });
+                let mut result: Vec<Option<engine::CardVec>> = vec![None; unknown_counts.len()];
+                'tries: for _ in 0..200 {
+                    let mut avail = base;
+                    for &i in &order {
+                        let (p, k) = unknown_counts[i];
+                        let pool = avail.difference(forbidden[p.index()]);
+                        if pool.len() < k {
+                            continue 'tries;
+                        }
+                        let got = engine::game::sample_cards(pool, k, rng);
+                        for &c in &got {
+                            avail.remove(c);
+                        }
+                        result[i] = Some(got);
+                    }
+                    break;
+                }
+                result
+                    .into_iter()
+                    .map(|r| r.expect("no consistent Numbers deal found"))
+                    .collect()
+            };
             for (&(p, _), cards) in unknown_counts.iter().zip(sampled) {
                 let mut cards = cards.into_iter();
                 for &id in &hand_slots[p.index()] {
@@ -2924,7 +3120,7 @@ impl Game for Scripted {
             match *e {
                 Event::Chose(_, k) => actions.push(Action::Choose(k)),
                 Event::Named(_, k) => actions.push(Action::Name(k)),
-                Event::PlayResolved(_) | Event::Showed(..) => {}
+                Event::PlayResolved(_) | Event::Showed(..) | Event::Discarded(..) => {}
                 Event::Middle(_) | Event::BidShown(..) => {}
                 Event::HiddenDeal(_)
                 | Event::Up(..)
@@ -3294,6 +3490,8 @@ pub enum Event {
     Showed(Seat, u8, Card),
     /// Scare-a-moosh: this seat named the game (or passed: 0).
     Named(Seat, u8),
+    /// Numbers: this seat threw away this card (shown).
+    Discarded(Seat, Card),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
