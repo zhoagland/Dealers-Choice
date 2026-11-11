@@ -241,6 +241,12 @@ fn print_report(r: &RunReport) {
             m.max_latency_ms,
             m.failures
         );
+        if m.input_tokens + m.output_tokens > 0 {
+            println!(
+                "    billed tokens: {} in, {} out",
+                m.input_tokens, m.output_tokens
+            );
+        }
     }
 }
 

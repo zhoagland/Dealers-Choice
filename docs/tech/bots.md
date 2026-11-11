@@ -187,8 +187,11 @@ Example: `config/external/example.toml` with `tools/external_bot_example.py`. `d
 decisions, cache hits, calls, mean/max latency and fallbacks. As built vs the sketch below: the cache key is
 SHA-256 of the whole request (model, game, observation, legal actions); the transports are synchronous behind a
 shared pool rather than an async runner (sims already run hands in parallel); the request also carries a
-readable label per legal action. Jev's own endpoint and payload aren't public yet, so `http` sends our request
-format; a thin adapter on either side maps it when Jev access arrives.
+readable label per legal action. **Jev** has its own transport (`transport = "jev"`, `config/external/jev.toml`):
+each decision is one System One `choice` question at `https://api.typesafe.ai/v1/systemone` (options `a0…` =
+the legal actions, described by their labels; state = the request JSON); the answer's `probabilities` map is the
+distribution, and billed tokens are counted for cost. A test runs it against a local stand-in for the endpoint;
+a live run needs a TypeSafe API key (Jev is in early access).
 
 
 ```rust

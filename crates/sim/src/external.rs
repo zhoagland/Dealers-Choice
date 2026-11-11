@@ -62,6 +62,11 @@ enum Reply {
 /// Something that answers decision requests.
 pub trait Transport: Send {
     fn decide(&mut self, req: &DecisionRequest) -> Result<Vec<f64>, String>;
+
+    /// Tokens billed since the last call (input, output), for cost reporting. Default none.
+    fn take_usage(&mut self) -> (u64, u64) {
+        (0, 0)
+    }
 }
 
 /// The spec file.
@@ -83,6 +88,12 @@ pub struct ExternalSpec {
     pub fallback: String,
     #[serde(default)]
     pub cache: Option<String>,
+    /// `jev` transport: the model name sent to TypeSafe (default `jev-latest`).
+    #[serde(default)]
+    pub jev_model: Option<String>,
+    /// `jev` transport: the instruction for the choice question.
+    #[serde(default)]
+    pub instructions: Option<String>,
 }
 
 fn default_timeout() -> u64 {
@@ -102,8 +113,10 @@ impl ExternalSpec {
         match spec.transport.as_str() {
             "stdio" if spec.command.is_empty() => Err(format!("{path}: stdio needs `command`")),
             "http" if spec.url.is_none() => Err(format!("{path}: http needs `url`")),
-            "stdio" | "http" | "mock" => Ok(spec),
-            t => Err(format!("{path}: unknown transport {t:?} (stdio or http)")),
+            "stdio" | "http" | "jev" | "mock" => Ok(spec),
+            t => Err(format!(
+                "{path}: unknown transport {t:?} (stdio, http or jev)"
+            )),
         }
     }
 
@@ -125,8 +138,139 @@ impl ExternalSpec {
                     timeout,
                 )))
             }
+            "jev" => {
+                let var = self.api_key_env.as_deref().unwrap_or("TYPESAFE_API_KEY");
+                let key = std::env::var(var)
+                    .map_err(|_| format!("set the {var} environment variable"))?;
+                Ok(Box::new(Jev::new(
+                    self.url.clone().unwrap_or_else(|| JEV_URL.into()),
+                    key,
+                    self.jev_model
+                        .clone()
+                        .unwrap_or_else(|| "jev-latest".into()),
+                    self.instructions.clone(),
+                    timeout,
+                )))
+            }
             _ => Ok(Box::new(Mock)),
         }
+    }
+}
+
+/// TypeSafe's System One endpoint (docs.typesafe.ai, quick start).
+pub const JEV_URL: &str = "https://api.typesafe.ai/v1/systemone";
+
+/// Jev (TypeSafe System One): the decision becomes one `choice` question whose options are the
+/// legal actions (`a0`, `a1`, … described by their labels); the state is the request as JSON.
+/// The answer's `probabilities` map gives the distribution. Usage tokens are counted for cost.
+pub struct Jev {
+    url: String,
+    key: String,
+    model: String,
+    instructions: String,
+    agent: ureq::Agent,
+    usage: (u64, u64),
+}
+
+impl Jev {
+    pub fn new(
+        url: String,
+        key: String,
+        model: String,
+        instructions: Option<String>,
+        timeout: Duration,
+    ) -> Jev {
+        let agent = ureq::Agent::config_builder()
+            .timeout_global(Some(timeout))
+            .http_status_as_error(false)
+            .build()
+            .into();
+        Jev {
+            url,
+            key,
+            model,
+            instructions: instructions.unwrap_or_else(|| {
+                "You are a strong poker player. The state is your seat's view of the hand \
+                 (`observation`) and the legal actions. Choose the action that maximises your \
+                 expected winnings."
+                    .into()
+            }),
+            agent,
+            usage: (0, 0),
+        }
+    }
+
+    /// The System One request body for `req`.
+    pub fn body(&self, req: &DecisionRequest) -> serde_json::Value {
+        let criteria: serde_json::Map<String, serde_json::Value> = req
+            .legal_labels
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (format!("a{i}"), serde_json::Value::String(l.clone())))
+            .collect();
+        serde_json::json!({
+            "model": self.model,
+            "state": serde_json::to_string(req).expect("requests serialize"),
+            "questions": {
+                "action": {
+                    "type": "choice",
+                    "instructions": self.instructions,
+                    "criteria": criteria,
+                }
+            }
+        })
+    }
+}
+
+/// The distribution in a System One reply, in legal-action order.
+pub fn jev_probs(reply: &serde_json::Value, n: usize) -> Result<Vec<f64>, String> {
+    let probs = reply
+        .pointer("/answers/action/probabilities")
+        .and_then(|p| p.as_object())
+        .ok_or_else(|| format!("no answers.action.probabilities in {reply}"))?;
+    (0..n)
+        .map(|i| {
+            probs
+                .get(&format!("a{i}"))
+                .and_then(|v| v.as_f64())
+                .ok_or_else(|| format!("no probability for a{i}"))
+        })
+        .collect()
+}
+
+impl Transport for Jev {
+    fn decide(&mut self, req: &DecisionRequest) -> Result<Vec<f64>, String> {
+        let mut reply = self
+            .agent
+            .post(&self.url)
+            .header("Authorization", &format!("Bearer {}", self.key))
+            .send_json(self.body(req))
+            .map_err(|e| e.to_string())?;
+        let status = reply.status();
+        let text = reply
+            .body_mut()
+            .read_to_string()
+            .map_err(|e| e.to_string())?;
+        if !status.is_success() {
+            return Err(format!(
+                "HTTP {status}: {}",
+                text.chars().take(200).collect::<String>()
+            ));
+        }
+        let json: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| format!("bad reply: {e}"))?;
+        let tokens = |k: &str| {
+            json.pointer(&format!("/usage/{k}"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0)
+        };
+        self.usage.0 += tokens("input_tokens");
+        self.usage.1 += tokens("output_tokens");
+        jev_probs(&json, req.legal.len())
+    }
+
+    fn take_usage(&mut self) -> (u64, u64) {
+        std::mem::take(&mut self.usage)
     }
 }
 
@@ -255,6 +399,9 @@ pub struct Metrics {
     pub failures: u64,
     pub total_latency_ms: f64,
     pub max_latency_ms: f64,
+    /// Billed tokens (Jev), for cost.
+    pub input_tokens: u64,
+    pub output_tokens: u64,
 }
 
 impl Metrics {
@@ -363,6 +510,7 @@ impl Shared {
         let start = Instant::now();
         let result = slot.as_mut().unwrap().decide(req);
         let ms = start.elapsed().as_secs_f64() * 1000.0;
+        let (tin, tout) = slot.as_mut().unwrap().take_usage();
         if result.is_err() && self.spec.transport == "stdio" {
             *slot = None; // restart a broken program next time
         }
@@ -372,6 +520,8 @@ impl Shared {
             m.calls += 1;
             m.total_latency_ms += ms;
             m.max_latency_ms = m.max_latency_ms.max(ms);
+            m.input_tokens += tin;
+            m.output_tokens += tout;
         }
         let probs = result?;
         if probs.len() != req.legal.len()
@@ -520,6 +670,99 @@ mod tests {
         let m2 = metrics().into_iter().find(|(k, _)| k == "mock").unwrap().1;
         assert_eq!(m2.calls, m1.calls);
         assert!(std::fs::read_to_string(&cache).unwrap().lines().count() as u64 == m1.calls);
+    }
+
+    /// A local stand-in for TypeSafe's endpoint: checks the request shape and answers in the
+    /// documented reply format, so the whole `jev` path runs without network or key.
+    #[test]
+    fn jev_transport_speaks_system_one() {
+        use std::io::{Read, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/v1/systemone", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut s = stream.unwrap();
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                // Read headers + body (Content-Length).
+                loop {
+                    let n = s.read(&mut chunk).unwrap();
+                    buf.extend_from_slice(&chunk[..n]);
+                    let text = String::from_utf8_lossy(&buf).to_string();
+                    if let Some(i) = text.find("\r\n\r\n") {
+                        let len: usize = text
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse().unwrap())
+                            })
+                            .unwrap_or(0);
+                        if buf.len() >= i + 4 + len {
+                            break;
+                        }
+                    }
+                }
+                let text = String::from_utf8_lossy(&buf).to_string();
+                assert!(
+                    text.contains("authorization: Bearer test-key")
+                        || text.contains("Authorization: Bearer test-key")
+                );
+                let body: serde_json::Value =
+                    serde_json::from_str(&text[text.find("\r\n\r\n").unwrap() + 4..]).unwrap();
+                assert_eq!(body["model"], "jev-latest");
+                assert_eq!(body["questions"]["action"]["type"], "choice");
+                let n = body["questions"]["action"]["criteria"]
+                    .as_object()
+                    .unwrap()
+                    .len();
+                // Prefer the last option.
+                let probs: serde_json::Map<String, serde_json::Value> = (0..n)
+                    .map(|i| {
+                        (
+                            format!("a{i}"),
+                            serde_json::json!(if i == n - 1 { 1.0 } else { 0.0 }),
+                        )
+                    })
+                    .collect();
+                let reply = serde_json::json!({
+                    "model": "jev-1.13.0",
+                    "answers": {"action": {"type": "choice", "choice": format!("a{}", n - 1), "confidence": 1.0, "probabilities": probs}},
+                    "usage": {"input_tokens": 400, "output_tokens": 20}
+                })
+                .to_string();
+                write!(
+                    s,
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",
+                    reply.len()
+                )
+                .unwrap();
+            }
+        });
+        // SAFETY: only this test reads this variable.
+        unsafe { std::env::set_var("DC_TEST_JEV_KEY", "test-key") };
+        let path = spec_file(
+            "jev.toml",
+            &format!(
+                "model = \"jev-test\"\ntransport = \"jev\"\nurl = \"{url}\"\napi_key_env = \"DC_TEST_JEV_KEY\"\nfallback = \"random\"\n"
+            ),
+        );
+        let game = Kuhn::new(Default::default());
+        play(
+            &game,
+            vec![format!("ext:{path}").parse().unwrap(), BotSpec::Random],
+            30,
+            5,
+        );
+        let m = metrics()
+            .into_iter()
+            .find(|(k, _)| k == "jev-test")
+            .unwrap()
+            .1;
+        assert_eq!(m.failures, 0, "{m:?}");
+        assert!(m.calls > 0);
+        assert_eq!(m.input_tokens, 400 * m.calls);
+        assert_eq!(m.output_tokens, 20 * m.calls);
     }
 
     #[test]
