@@ -733,7 +733,7 @@ impl Scripted {
                     return true;
                 }
                 PushTask::Offer(q) => {
-                    if !s.betting.is_folded(q) && s.stock.len() >= 1 {
+                    if !s.betting.is_folded(q) && !s.stock.is_empty() {
                         s.prompts.push_back((q, Prompt::PushOrKeep));
                         return true;
                     }
