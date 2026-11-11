@@ -72,8 +72,9 @@ jobs:
         working-directory: web
 
   docker:
-    # The deploy image builds (FR-WB-10). Tags only, to keep pull requests fast.
-    if: startsWith(github.ref, 'refs/tags/')
+    # The deploy image builds (FR-WB-10). Tags, or CI started by hand (Actions → ci → Run
+    # workflow), to keep pull requests fast.
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
