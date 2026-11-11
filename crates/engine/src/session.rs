@@ -8,8 +8,13 @@
 //!   stake from bankroll to stack and cashing out moves the remainder back. For `Bankroll`
 //!   games the stack *is* the bankroll (bots get `bot_stack`).
 //!
-//! A game is one hand by default, or one orbit (`GameLength`). After each game, the seat to the
-//! chooser's left chooses next.
+//! A game is one hand by default, one orbit, or (`UntilDone`) as many hands as it takes
+//! (`GameLength`). After each game, the seat to the chooser's left chooses next.
+//!
+//! `UntilDone` games keep the same seats for the whole game, so the game's carried state
+//! (`Game::Carry`) can refer to seats by number: seats that can't play a hand stay in the
+//! `HandSetup` and are flagged in `dealt_out`. The caller ends the game with
+//! [`Table::finish_game_early`] once `Game::game_over` says so.
 
 use serde::{Deserialize, Serialize};
 
@@ -87,6 +92,8 @@ struct GameInProgress {
     stake: StakeModel,
     hands_total: usize,
     hands_played: usize,
+    /// `UntilDone` only: the table indices in the game, fixed at the start.
+    fixed_seats: Option<Vec<usize>>,
 }
 
 impl Table {
@@ -121,14 +128,16 @@ impl Table {
             self.seats[i].sitting_out = false;
             self.buy_in(i, meta.stake_model);
         }
-        let hands_total = match meta.length {
-            GameLength::SingleHand => 1,
-            GameLength::Orbit => self.seats.len(),
+        let (hands_total, fixed_seats) = match meta.length {
+            GameLength::SingleHand => (1, None),
+            GameLength::Orbit => (self.seats.len(), None),
+            GameLength::UntilDone { max_hands } => (max_hands as usize, Some(self.active())),
         };
         self.current = Some(GameInProgress {
             stake: meta.stake_model,
             hands_total,
             hands_played: 0,
+            fixed_seats,
         });
         hands_total
     }
@@ -167,6 +176,9 @@ impl Table {
         if g.hands_played >= g.hands_total {
             return None;
         }
+        if let Some(fixed) = &g.fixed_seats {
+            return self.next_fixed_hand(g, fixed);
+        }
         let active = self.active();
         if active.len() < 2 {
             return None;
@@ -189,8 +201,50 @@ impl Table {
             chooser: to_hand(chooser_table),
             first_hand_of_game: g.hands_played == 0,
             stacks: active.iter().map(|&i| self.seats[i].stack).collect(),
+            dealt_out: 0,
         };
         Some((setup, active))
+    }
+
+    /// `UntilDone`: every seat that started the game, with the ones that can't play this hand
+    /// flagged. The button moves one game seat per hand, starting at the chooser.
+    fn next_fixed_hand(
+        &self,
+        g: &GameInProgress,
+        fixed: &[usize],
+    ) -> Option<(HandSetup, Vec<usize>)> {
+        let out = |i: usize| self.seats[i].sitting_out || self.seats[i].stack == Chips::ZERO;
+        let dealt_out = fixed
+            .iter()
+            .enumerate()
+            .filter(|&(_, &i)| out(i))
+            .fold(0u16, |m, (k, _)| m | 1 << k);
+        if fixed.len() - (dealt_out.count_ones() as usize) < 2 {
+            return None;
+        }
+        let n = fixed.len();
+        let chooser = fixed.iter().position(|&i| i == self.chooser).unwrap_or(0);
+        // The button skips seats that are dealt out.
+        let button = (0..n)
+            .map(|k| (chooser + g.hands_played + k) % n)
+            .find(|&k| dealt_out & (1 << k) == 0)
+            .unwrap();
+        let setup = HandSetup {
+            num_seats: n as u8,
+            button: Seat(button as u8),
+            chooser: Seat(chooser as u8),
+            first_hand_of_game: g.hands_played == 0,
+            stacks: fixed.iter().map(|&i| self.seats[i].stack).collect(),
+            dealt_out,
+        };
+        Some((setup, fixed.to_vec()))
+    }
+
+    /// End an `UntilDone` game after the current hand (its `Game::game_over` returned true).
+    pub fn finish_game_early(&mut self) {
+        if let Some(g) = self.current.as_mut() {
+            g.hands_total = g.hands_played;
+        }
     }
 
     /// Record a finished hand: apply payoffs (hand seats mapped back through `map`).

@@ -90,6 +90,7 @@ pub fn run(args: SpotArgs) -> CliResult {
         chooser: Seat(spec.button),
         first_hand_of_game: false,
         stacks: spec.stacks.iter().map(|&d| Chips::dollars(d)).collect(),
+        dealt_out: 0,
     };
     let hero = Seat(spec.hero);
     let hc = cards(&spec.hero_cards)?;

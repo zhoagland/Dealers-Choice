@@ -14,11 +14,13 @@ use rand::Rng;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use smallvec::SmallVec;
 
+use crate::analysis::{AnalysisLabels, DecisionContext};
 use crate::card::{Card, CardSet};
 use crate::rng::DetRng;
+use crate::view::TableView;
 
 /// Bumped on any breaking change to this trait. Stored in every hand record.
-pub const API_VERSION: u32 = 1;
+pub const API_VERSION: u32 = 2;
 
 // ---------------------------------------------------------------------------------------------
 // Small value types
@@ -157,6 +159,11 @@ pub enum GameLength {
     SingleHand,
     /// One trip of the button, starting with the chooser dealing.
     Orbit,
+    /// Repeat hands, carrying [`Game::Carry`] between them, until [`Game::game_over`] (Guts Leg,
+    /// 3-2-1 Drop). The seats are fixed for the whole game; seats that can't play a hand are
+    /// listed in [`HandSetup::dealt_out`]. `max_hands` is a safety cap: the driver must end the
+    /// game (and award any carried pot) by then, so sims always terminate (C8).
+    UntilDone { max_hands: u32 },
 }
 
 /// Static facts about a game. Returned by [`Game::meta`].
@@ -185,6 +192,10 @@ pub struct HandSetup {
     pub first_hand_of_game: bool,
     /// Chips each seat can bet this hand.
     pub stacks: Vec<Chips>,
+    /// Bitmask of seats that sit this hand out (busted or out of an `UntilDone` game). Always 0
+    /// for `SingleHand`/`Orbit` games, whose hands only include seats that can play.
+    #[serde(default)]
+    pub dealt_out: u16,
 }
 
 impl HandSetup {
@@ -196,7 +207,13 @@ impl HandSetup {
             chooser: Seat(0),
             first_hand_of_game: true,
             stacks: vec![stack; num_seats as usize],
+            dealt_out: 0,
         }
+    }
+
+    /// Whether `seat` is dealt into this hand.
+    pub fn dealt_in(&self, seat: Seat) -> bool {
+        self.dealt_out & (1 << seat.0) == 0
     }
 
     /// All seats in order, as `Seat` values.
@@ -257,11 +274,47 @@ pub trait Game: Send + Sync + Sized + 'static {
     type Observation: Clone + fmt::Debug + Eq + Hash + Serialize + DeserializeOwned + Send + Sync;
     /// Per-game tunables (blinds, structure, bot bet menu).
     type Config: Clone + fmt::Debug + Default + Serialize + DeserializeOwned + Send + Sync;
+    /// State carried from one hand to the next within one game (API v2): legs won, a carried-over
+    /// pot, strikes, who is out. `()` for `SingleHand`/`Orbit` games. `Default` = the first hand.
+    /// Carried state is public, so it belongs in every seat's observation.
+    type Carry: Clone
+        + fmt::Debug
+        + Default
+        + PartialEq
+        + Serialize
+        + DeserializeOwned
+        + Send
+        + Sync;
 
     fn new(config: Self::Config) -> Self;
     fn meta(&self) -> &GameMeta;
 
-    fn new_hand(&self, setup: &HandSetup) -> Self::State;
+    /// Start a hand, continuing from `carry` (the previous hand's [`Game::carry_out`]).
+    fn new_hand_with(&self, setup: &HandSetup, carry: &Self::Carry) -> Self::State;
+
+    /// Start the first (or only) hand of a game.
+    fn new_hand(&self, setup: &HandSetup) -> Self::State {
+        self.new_hand_with(setup, &Self::Carry::default())
+    }
+
+    /// Only valid at Terminal: what the next hand of this game starts from.
+    fn carry_out(&self, _s: &Self::State) -> Self::Carry {
+        Self::Carry::default()
+    }
+
+    /// `UntilDone` games: true when the game is over after a hand that produced `carry`.
+    /// Other games are over when their hand count is reached, so the default is `true`.
+    fn game_over(&self, _carry: &Self::Carry) -> bool {
+        true
+    }
+
+    /// Chips sitting in `carry` (a carried-over pot). Hand payoffs then satisfy
+    /// `Σ payoffs = carried_chips(carry_in) − carried_chips(carry_out)`; across a whole game
+    /// they sum to zero, because the game must award the carried pot before `game_over`.
+    fn carried_chips(&self, _carry: &Self::Carry) -> Chips {
+        Chips::ZERO
+    }
+
     fn to_act(&self, s: &Self::State) -> ToAct;
 
     /// Seat to act: the abstract action menu bots search over. Chance: every outcome.
@@ -314,6 +367,29 @@ pub trait Game: Send + Sync + Sized + 'static {
 
     /// Value unit for EV display and bot temperature: the big blind or the ante.
     fn eval_unit(&self) -> Chips;
+
+    /// The game-agnostic picture of what this observer sees, for graphical UIs (API v2,
+    /// `docs/tech/web.md` §4). Must be built from `obs` alone, so it can't leak.
+    fn view(&self, obs: &Self::Observation) -> TableView;
+
+    /// A small id for `seat`'s starting hand (e.g. one of the 169 Hold'em classes), so the
+    /// simulator can aggregate results per starting hand over **every** simulated hand without
+    /// storing records. Called on the terminal state; it describes the cards the seat started with.
+    /// Default: no classes.
+    fn start_class(&self, _s: &Self::State, _seat: Seat) -> Option<u16> {
+        None
+    }
+
+    /// The situation `seat` is deciding in (it is `seat`'s turn in `s`), for "when to bet, how
+    /// much" reports. Called on the full state by the simulator, never by bots. Default: none.
+    fn decision_context(&self, _s: &Self::State, _seat: Seat) -> Option<DecisionContext> {
+        None
+    }
+
+    /// Names for the ids returned by [`Game::start_class`] and [`Game::decision_context`].
+    fn analysis_labels(&self) -> AnalysisLabels {
+        AnalysisLabels::default()
+    }
 
     // ----- Text interface (optional; used by the CLI) ----------------------------------------
     //

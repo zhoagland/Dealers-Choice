@@ -78,6 +78,7 @@ fn play_one<G: Game>(game: &G, cfg: &Conformance, n: u8, hand: usize, varied: &m
         chooser: Seat((hand % n as usize) as u8),
         first_hand_of_game: hand.is_multiple_of(2),
         stacks: vec![cfg.stack; n as usize],
+        dealt_out: 0,
     };
     let mut deal_rng = derive_rng(cfg.seed, hand as u64, Stream::Deal);
     let mut play_rng = derive_rng(cfg.seed, hand as u64, Stream::Seat(0));
@@ -301,6 +302,7 @@ mod tests {
         type Action = Act;
         type Observation = Obs;
         type Config = ();
+        type Carry = ();
 
         fn new(_: ()) -> Self {
             HighCard {
@@ -318,7 +320,7 @@ mod tests {
         fn meta(&self) -> &GameMeta {
             &self.meta
         }
-        fn new_hand(&self, setup: &HandSetup) -> St {
+        fn new_hand_with(&self, setup: &HandSetup, _carry: &()) -> St {
             St {
                 n: setup.num_seats,
                 cards: Vec::new(),
@@ -456,6 +458,20 @@ mod tests {
         }
         fn eval_unit(&self) -> Chips {
             Chips(1)
+        }
+        fn view(&self, obs: &Obs) -> crate::view::TableView {
+            crate::view::TableView {
+                game: "test".into(),
+                phase: String::new(),
+                viewer: obs.seat,
+                button: Seat(0),
+                to_act: None,
+                seats: Vec::new(),
+                boards: Vec::new(),
+                pots: Vec::new(),
+                wilds: Vec::new(),
+                notes: Vec::new(),
+            }
         }
     }
 

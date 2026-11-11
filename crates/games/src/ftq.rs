@@ -25,6 +25,7 @@ use engine::eval::{eval_high_wild, eval_low_a6_wild, eval_partial_board};
 use engine::game::sample_hidden_hands;
 use engine::pot::{Declare, award_declared, build_pots, order_from_button};
 use engine::replay::replay_interleaved;
+use engine::view::{CardSlot, PotView, SeatStatus, SeatView, TableView, WildView};
 use engine::{
     ActionClass, Card, CardSet, Chips, DetRng, Game, GameLength, GameMeta, HandSetup, HandValue,
     HiddenSampler, IllegalAction, Rank, Seat, StakeModel, ToAct,
@@ -346,6 +347,7 @@ impl Game for FollowTheQueen {
     type Action = Action;
     type Observation = Observation;
     type Config = Config;
+    type Carry = ();
 
     fn new(config: Config) -> FollowTheQueen {
         FollowTheQueen {
@@ -366,7 +368,7 @@ impl Game for FollowTheQueen {
         &self.meta
     }
 
-    fn new_hand(&self, setup: &HandSetup) -> State {
+    fn new_hand_with(&self, setup: &HandSetup, _carry: &()) -> State {
         let n = setup.num_seats as usize;
         let min_bet = match self.config.structure {
             Structure::SpreadLimit { min_inc, .. } => min_inc,
@@ -629,6 +631,97 @@ impl Game for FollowTheQueen {
     /// $1: between the 50¢ minimum and $2 maximum increment.
     fn eval_unit(&self) -> Chips {
         Chips(100)
+    }
+
+    fn view(&self, obs: &Observation) -> TableView {
+        // Public numbers come from a determinization; its hidden cards are never shown.
+        let s = self.determinize(
+            obs,
+            &mut engine::UniformSampler,
+            &mut engine::rng::rng_from_seed(0),
+        );
+        let b = &s.betting;
+        let declared: Vec<Seat> = obs
+            .history
+            .iter()
+            .filter_map(|e| match *e {
+                PublicEvent::Declared(p) => Some(p),
+                _ => None,
+            })
+            .collect();
+        let seats = (0..obs.setup.num_seats)
+            .map(Seat)
+            .map(|seat| {
+                let i = seat.index();
+                let mut v = SeatView::new(seat, b.stacks()[i], b.street_committed(seat));
+                v.status = if b.is_folded(seat) {
+                    SeatStatus::Folded
+                } else if b.is_all_in(seat) {
+                    SeatStatus::AllIn
+                } else {
+                    SeatStatus::Active
+                };
+                v.cards = if seat == obs.seat {
+                    obs.own_down
+                        .iter()
+                        .map(|&c| CardSlot::Down(Some(c)))
+                        .collect()
+                } else if let Some(shown) = &obs.shown[i] {
+                    shown.iter().map(|&c| CardSlot::Up(c)).collect()
+                } else {
+                    vec![CardSlot::Down(None); s.down[i].len()]
+                };
+                v.cards
+                    .extend(obs.upcards(seat).iter().map(|&c| CardSlot::Up(c)));
+                if seat == obs.setup.chooser {
+                    v.badges.push("chooser".into());
+                }
+                match (&obs.declarations, seat == obs.seat) {
+                    (Some(all), _) => {
+                        if let Some(d) = all[i] {
+                            v.badges.push(format!("{d:?}"));
+                        }
+                    }
+                    (None, true) => {
+                        if let Some(d) = obs.own_declaration {
+                            v.badges.push(format!("you declared {d:?}"));
+                        }
+                    }
+                    (None, false) => {
+                        if declared.contains(&seat) {
+                            v.badges.push("declared".into());
+                        }
+                    }
+                }
+                v
+            })
+            .collect();
+        let (wilds, notes) = match obs.wild() {
+            Wild::Rank(rank) => (vec![WildView { rank, seat: None }], Vec::new()),
+            Wild::AwaitingNextUpcard => (
+                Vec::new(),
+                vec!["A Queen is showing: the next upcard's rank becomes wild".into()],
+            ),
+            Wild::None => (Vec::new(), Vec::new()),
+        };
+        TableView {
+            game: self.meta.display_name.into(),
+            phase: format!("{:?}", s.phase),
+            viewer: obs.seat,
+            button: obs.setup.button,
+            to_act: match self.to_act(&s) {
+                ToAct::Seat(p) => Some(p),
+                _ => None,
+            },
+            seats,
+            boards: Vec::new(),
+            pots: vec![PotView {
+                name: "Pot".into(),
+                amount: b.pot(),
+            }],
+            wilds,
+            notes,
+        }
     }
 
     fn describe_observation(&self, obs: &Observation) -> String {

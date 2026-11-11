@@ -33,7 +33,17 @@ pub fn replay<G: Game>(
     setup: &HandSetup,
     actions: &[G::Action],
 ) -> Result<G::State, ReplayError> {
-    let mut state = game.new_hand(setup);
+    replay_with(game, setup, &G::Carry::default(), actions)
+}
+
+/// [`replay`] for a later hand of an `UntilDone` game, starting from `carry`.
+pub fn replay_with<G: Game>(
+    game: &G,
+    setup: &HandSetup,
+    carry: &G::Carry,
+    actions: &[G::Action],
+) -> Result<G::State, ReplayError> {
+    let mut state = game.new_hand_with(setup, carry);
     for (step, &action) in actions.iter().enumerate() {
         if game.to_act(&state) == ToAct::Terminal {
             return Err(ReplayError {
@@ -66,10 +76,21 @@ pub fn replay_interleaved<G: Game>(
     deals: impl IntoIterator<Item = G::Action>,
     actions: impl IntoIterator<Item = G::Action>,
 ) -> G::State {
+    replay_interleaved_with(game, setup, &G::Carry::default(), deals, actions)
+}
+
+/// [`replay_interleaved`] starting from `carry` (later hands of an `UntilDone` game).
+pub fn replay_interleaved_with<G: Game>(
+    game: &G,
+    setup: &HandSetup,
+    carry: &G::Carry,
+    deals: impl IntoIterator<Item = G::Action>,
+    actions: impl IntoIterator<Item = G::Action>,
+) -> G::State {
     // `.peekable()` lets us look at the next item without consuming it.
     let mut deals = deals.into_iter().peekable();
     let mut actions = actions.into_iter().peekable();
-    let mut state = game.new_hand(setup);
+    let mut state = game.new_hand_with(setup, carry);
     loop {
         let next = match game.to_act(&state) {
             ToAct::Terminal => break,

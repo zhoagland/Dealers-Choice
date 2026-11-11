@@ -19,6 +19,7 @@ use engine::eval::high::eval_high;
 use engine::game::sample_hidden_hands;
 use engine::pot::{award_high, build_pots, order_from_button};
 use engine::replay::replay_interleaved;
+use engine::view::{BoardView, CardSlot, PotView, SeatStatus, SeatView, TableView};
 use engine::{
     ActionClass, Card, CardSet, Chips, DetRng, Game, GameLength, GameMeta, HandSetup, HandValue,
     HiddenSampler, IllegalAction, Seat, StakeModel, ToAct,
@@ -300,6 +301,7 @@ impl Game for Holdem {
     type Action = Action;
     type Observation = Observation;
     type Config = Config;
+    type Carry = ();
 
     fn new(config: Config) -> Holdem {
         let stake = config.table_stake;
@@ -321,7 +323,7 @@ impl Game for Holdem {
         &self.meta
     }
 
-    fn new_hand(&self, setup: &HandSetup) -> State {
+    fn new_hand_with(&self, setup: &HandSetup, _carry: &()) -> State {
         let n = setup.num_seats;
         let mut betting = Betting::new(Structure::NoLimit, &setup.stacks, self.config.big_blind);
         if setup.first_hand_of_game && self.config.dealer_ante > Chips::ZERO {
@@ -570,6 +572,64 @@ impl Game for Holdem {
     }
     fn eval_unit(&self) -> Chips {
         self.config.big_blind
+    }
+
+    fn view(&self, obs: &Observation) -> TableView {
+        // Stacks, bets and the pot are public, so any determinization has the right ones.
+        // Its hidden cards are sampled, so only the *count* of hidden cards is read from it.
+        let s = self.determinize(
+            obs,
+            &mut engine::UniformSampler,
+            &mut engine::rng::rng_from_seed(0),
+        );
+        let b = &s.betting;
+        let seats = (0..obs.setup.num_seats)
+            .map(Seat)
+            .map(|seat| {
+                let i = seat.index();
+                let mut v = SeatView::new(seat, b.stacks()[i], b.street_committed(seat));
+                v.status = if b.is_folded(seat) {
+                    SeatStatus::Folded
+                } else if b.is_all_in(seat) {
+                    SeatStatus::AllIn
+                } else {
+                    SeatStatus::Active
+                };
+                v.cards = if seat == obs.seat {
+                    obs.hole.iter().map(|&c| CardSlot::Down(Some(c))).collect()
+                } else if let Some(shown) = &obs.shown[i] {
+                    shown.iter().map(|&c| CardSlot::Up(c)).collect()
+                } else {
+                    vec![CardSlot::Down(None); s.hole[i].len()]
+                };
+                if seat == obs.setup.chooser {
+                    v.badges.push("chooser".into());
+                }
+                v
+            })
+            .collect();
+        let board = obs.board();
+        let slots = (0..5)
+            .map(|k| board.get(k).map_or(CardSlot::Empty, |&c| CardSlot::Up(c)))
+            .collect();
+        TableView {
+            game: self.meta.display_name.into(),
+            phase: format!("{:?}", s.street),
+            viewer: obs.seat,
+            button: obs.setup.button,
+            to_act: match self.to_act(&s) {
+                ToAct::Seat(p) => Some(p),
+                _ => None,
+            },
+            seats,
+            boards: vec![BoardView::row("Board", slots)],
+            pots: vec![PotView {
+                name: "Pot".into(),
+                amount: b.pot(),
+            }],
+            wilds: Vec::new(),
+            notes: Vec::new(),
+        }
     }
 
     fn describe_observation(&self, obs: &Observation) -> String {
