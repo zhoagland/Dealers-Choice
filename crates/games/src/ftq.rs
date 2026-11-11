@@ -355,7 +355,8 @@ impl Game for FollowTheQueen {
             config,
             meta: GameMeta {
                 id: "ftq",
-                version: 1,
+                // 2: OQ-3, every contestant failing Both now splits the pot evenly (G0).
+                version: 2,
                 display_name: "Follow the Queen (hi/lo declare)",
                 seats: 2..=7,
                 stake_model: StakeModel::Bankroll,

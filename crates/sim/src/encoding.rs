@@ -72,6 +72,14 @@ pub fn encode<A: Serialize>(r: &HandRecord<A>) -> Vec<u8> {
     out
 }
 
+/// The `api_version` of the first record in a buffer, without decoding the rest. Records from
+/// another API version have a different layout and can't be decoded as this one; callers check
+/// this first and skip them.
+pub fn peek_api_version(bytes: &[u8]) -> Option<u32> {
+    let body = bytes.get(4..)?;
+    postcard::take_from_bytes::<u32>(body).ok().map(|(v, _)| v)
+}
+
 /// Decode every record in a buffer of length-prefixed records.
 pub fn decode_all<A: DeserializeOwned>(mut bytes: &[u8]) -> Result<Vec<HandRecord<A>>, String> {
     let mut out = Vec::new();
@@ -85,4 +93,52 @@ pub fn decode_all<A: DeserializeOwned>(mut bytes: &[u8]) -> Result<Vec<HandRecor
         bytes = &bytes[4 + len..];
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn api_version_is_readable_from_any_record_layout() {
+        let rec = HandRecord::new(
+            "kuhn",
+            1,
+            0,
+            0,
+            vec![0, 1],
+            HandSetup::simple(2, engine::Chips(100)),
+            encode_carry(&()),
+            vec![1u8, 2, 3],
+        );
+        assert_eq!(peek_api_version(&encode(&rec)), Some(API_VERSION));
+
+        // An API v1 record (no `carry_in`) still reports its version, so it can be skipped.
+        #[derive(Serialize)]
+        struct V1 {
+            api_version: u32,
+            game_id: String,
+            game_version: u32,
+            deal: u64,
+            rotation: u8,
+            seating: Vec<u8>,
+            setup: HandSetup,
+            actions: Vec<u8>,
+        }
+        let old = V1 {
+            api_version: 1,
+            game_id: "kuhn".into(),
+            game_version: 1,
+            deal: 0,
+            rotation: 0,
+            seating: vec![0, 1],
+            setup: HandSetup::simple(2, engine::Chips(100)),
+            actions: vec![1, 2],
+        };
+        let body = postcard::to_allocvec(&old).unwrap();
+        let mut bytes = (body.len() as u32).to_le_bytes().to_vec();
+        bytes.extend(body);
+        assert_eq!(peek_api_version(&bytes), Some(1));
+        assert_eq!(peek_api_version(&[]), None);
+    }
 }

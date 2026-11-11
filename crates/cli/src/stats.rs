@@ -8,10 +8,10 @@ use std::collections::BTreeMap;
 
 use clap::Args;
 
-use engine::{Game, Seat};
+use engine::{API_VERSION, Game, Seat};
 use games::registry::{GameVisitor, with_game};
 use sim::analytics::{PlayerStats, Ratio, Spot, add_hand, leak_report, range_grid};
-use sim::encoding::{HandRecord, decode_all, decode_carry};
+use sim::encoding::{HandRecord, decode_all, decode_carry, peek_api_version};
 use storage::{DataRoot, Db, HandRow};
 
 use crate::CliResult;
@@ -94,6 +94,10 @@ impl GameVisitor<Result<PlayerStats, String>> for GameStats<'_> {
         let mut spots_by_hand: BTreeMap<i64, BTreeMap<usize, Spot>> = BTreeMap::new();
         let mut skipped = 0;
         for row in self.rows {
+            if peek_api_version(&row.record) != Some(API_VERSION) {
+                skipped += 1; // stored by an older engine: a different record layout
+                continue;
+            }
             let records: Vec<HandRecord<G::Action>> = decode_all(&row.record)?;
             let Some(rec) = records.into_iter().next() else {
                 continue;

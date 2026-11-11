@@ -88,7 +88,10 @@ Engine work in G0, besides the trait:
 - Optional show (G-3): losing players may Show or Muck after required shows.
 - `pot::award_shares`: a pot split into named shares (High, Low, Top board, Spade, …), each with its own
   ranking and eligible set, with the existing Both-declaration rule applied per share pair. Replaces
-  `award_declared` (kept as a thin wrapper).
+  `award_declared` (kept as a thin wrapper). **Done 2026-11-11:** `pot::award_shares(pots, shares, claims,
+  order)` with `Share { name, values }` and `Claim::{One(k), All}`; `claims = None` for games without
+  declarations (Chicago). A share nobody can win rolls into the others; odd chips go to earlier shares. OQ-3
+  even split is in; FTQ `meta.version` 1 → 2.
 - `eval::Evaluator` trait + registry so evaluators are reused across games and oracle-tested in one place.
 - `engine::testing` conformance: C4 (no leaks) learns about inverted information (the observer's *own*
   cards must vary across determinizations in Indian games; others' cards must not).
@@ -101,7 +104,10 @@ Engine work in G0, besides the trait:
   one `UntilDone` game as one deal. Toy `engine::testing::guts_lite` passes conformance with carry
   replay (exit criterion).
 - Migrate Kuhn, Leduc, Hold'em and FTQ to v2 and bump their `meta.version` (records/blueprints invalidate
-  per handbook §4). Add `view()` for each.
+  per handbook §4). Add `view()` for each. **Done 2026-11-11, one deviation:** only FTQ's version is bumped (its rules
+  changed). Kuhn, Leduc and Hold'em keep version 1: their rules, `Action` and `Observation` are unchanged
+  (handbook §4), so saved Kuhn/Leduc blueprints stay valid. The record layout change is covered by
+  `API_VERSION` 2: `dc stats` skips records from another API version (`sim::encoding::peek_api_version`).
 
 **Exit criteria (G0):** all v1 tests pass on v2; a toy `UntilDone` game (Guts-lite) passes conformance
 including carry replay; CLI play unchanged.
