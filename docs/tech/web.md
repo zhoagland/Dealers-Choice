@@ -130,8 +130,9 @@ generic test asserts that `view()` is a pure function of the observation, so no 
 
 - **Discord OAuth2**, authorization code flow with PKCE and `state`; scope `identify` (+ `guilds` only if the
   allowlist below is on). The server stores the Discord user id, username, and avatar hash. No passwords, no email.
-- **Allowlist (D-WEB-2):** optional `ALLOWED_GUILD_ID`. If set, only members of that Discord server can sign in.
-  Recommended for a private home game. Plus an `ADMIN_DISCORD_IDS` list for the owner.
+- **Allowlist (D-WEB-2, confirmed):** only members of the owner's Discord server can sign in. `ALLOWED_GUILD_ID`
+  is required in production (the server refuses to start without it unless `DEV_MODE=1`), and sign-in
+  requests the `guilds` scope to check membership. Plus an `ADMIN_DISCORD_IDS` list for the owner.
 - Sessions: random 256-bit id in an `HttpOnly; Secure; SameSite=Lax` cookie, stored hashed in SQLite, 30-day
   sliding expiry. The WebSocket upgrade checks the cookie and the `Origin` header.
 - **Money (D-WEB-3):** play money only. Each account has a bankroll on the existing ledger (FR-SS-1). New accounts
@@ -147,7 +148,7 @@ generic test asserts that `view()` is a pure function of the observation, so no 
    `TableStake` buy-ins and rebuys go through the ledger (FR-SS-2/3).
 4. Players can sit out (skipped from the next game) or leave between games.
 
-**Timers (D-WEB-4):** 30 s per decision + a 60 s time bank per game, refilled each game. On timeout: check
+**Timers (D-WEB-4, confirmed):** 30 s per decision + a 60 s time bank per game, refilled each game. On timeout: check
 if possible, else fold; declarations default to High. Chooser timeout: the server picks from the pool at random.
 **Disconnects:** the seat stays; the timer runs; three consecutive timeouts → sit out after this game.
 
@@ -197,12 +198,15 @@ Backups: nightly `VACUUM INTO` snapshot to `data/backups/` (7 kept); the handboo
   the binary and static files). `docker-compose.yml` with a volume for `DC_DATA_ROOT`.
 - Config via env: `PUBLIC_URL`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `ALLOWED_GUILD_ID`,
   `ADMIN_DISCORD_IDS`, `DC_DATA_ROOT`, `BIND_ADDR`.
-- TLS is terminated by the owner's existing reverse proxy. Example configs for Caddy and nginx (WebSocket upgrade
-  headers) ship in `deploy/`.
+- **Target (confirmed, OQ-11):** a Linux x86-64 server with Docker + Compose. The compose file **bundles Caddy**,
+  which gets Let's Encrypt certificates automatically for `PUBLIC_URL`'s domain (the owner sets it in `.env` at
+  deploy time; nothing in the repo hard-codes it).
+- `deploy/README.md` is a step-by-step guide: create the Discord application (Developer Portal → OAuth2 → add
+  `https://<domain>/auth/discord/callback` as the redirect), find the guild id, fill `.env`, point DNS at the
+  server, `docker compose up -d`. Secrets live only in the server's `.env`.
 - Health: `GET /healthz`; graceful shutdown waits for hands in progress to end (max 5 min), then refunds.
 - CI builds the image on tags; deploying is `docker compose pull && docker compose up -d` (handbook).
-- **Owner input needed (OQ-11):** server OS/CPU architecture, whether Docker is available, existing reverse proxy,
-  domain/subdomain, and the Discord application (client id/secret).
+- Supplied by the owner at deploy time: the domain, Discord client id/secret, guild id, admin ids.
 
 ## 11. Security checklist
 

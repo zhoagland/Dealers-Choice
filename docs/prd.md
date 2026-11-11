@@ -184,8 +184,8 @@ House conventions that are engine-level, not per-game:
 - **FR-EV-1** `evaluate(observation, budget) → [(action, Q, standard_error)]`, sorted by Q.
 - **FR-EV-2** **Spot analysis:** the user specifies a game, the visible state, the action history, the hero's
   cards, and a range for each opponent. Hold'em ranges use standard notation (`TT+, AKs, KQo`, weights
-  allowed). Stud/FTQ ranges in v1 are "uniform over unseen cards" with optional card-level
-  weights (see OQ-5). Output as in FR-EV-1.
+  allowed). Stud/FTQ ranges in v1 are "uniform over unseen cards"; Phase 2 adds hand-category
+  weights (OQ-5). Output as in FR-EV-1.
 - **FR-EV-3** **Coach, post-hand (default on):** after each hand, list every human decision with
   `EV_loss = Q(best) − Q(chosen) ± SE`. A decision is flagged only when `EV_loss > 2·SE`, so
   search noise isn't reported as a mistake.
@@ -383,7 +383,7 @@ M9 ─┬─ S1 → S2 → S3 (grows with G) → S4 → S5 → S6
 | A6 | ~0.5 s per bot decision is acceptable during play | Strength presets would need re-tuning |
 | A7 | FTQ bet/raise increments are any multiple of $0.50 from $0.50 to $2.00 (confirmed) | — |
 | A8 | FTQ "best board": visible wilds count; no partial straights/flushes; ties → closest to dealer's left | Only the action-order function changes |
-| A9 | Games without Bible stakes use the defaults in `game-catalog.md` §3 (pot-limit Omaha family, FTQ spread elsewhere, dealer ante only) | Config change per game + version bump; sims re-run |
+| A9 | Every game except Texas Hold'em uses the FTQ structure unless its Bible section has its own money rules (`game-catalog.md` §3, owner decision) | Config change per game + version bump; sims re-run |
 | A10 | Sims run on the dev PC only, sharing it with development | Campaign estimates are for ~12 threads; a cloud box only changes `--threads` |
 | A11 | The web group is small (≤ ~30 accounts, ≤ 5 concurrent tables): one process + SQLite suffices | Move to Postgres and multiple processes (storage.md §4) |
 | A12 | Discord is the only identity provider | Add providers behind the same `account` table |
@@ -393,22 +393,24 @@ M9 ─┬─ S1 → S2 → S3 (grows with G) → S4 → S5 → S6
 - ~~OQ-1~~ Resolved: A7 confirmed (spread $0.50–$2.00). First to act on each street = best
   board showing (see §7).
 - ~~OQ-2~~ Resolved: wild plays as best possible card for high and low.
-- **OQ-3** "Both" declaration edge cases: exact payout when the Both declarer loses one side and nobody
-  else declared that side.
+- ~~OQ-3~~ Resolved (2026-11-10): a failed Both declarer is out of the pot and the others take it (if nobody
+  declared the other side, the challengers take the whole pot). If **every** remaining contestant failed Both,
+  the pot is split **evenly** among them (implemented in G0).
 - ~~OQ-4~~ Resolved: dealer ante applies to every game.
-- **OQ-5** Range notation for stud games (no standard notation exists). Candidates: card-level weights,
-  or hand-category weights.
+- ~~OQ-5~~ Resolved (2026-11-10): stud-game ranges use **hand-category weights** (e.g. `trips+: 2, pair: 1,
+  high: 0.3`), applied to what the hidden cards make with the visible board.
 - ~~OQ-6~~ Resolved: FR-SS-3.
-- **OQ-7** Coach mode in multiway pots: EV against the ISMCTS opponent model only, or against a
-  user-chosen opponent model?
-- **OQ-8** Owner review of the catalog rule decisions (`game-catalog.md` §5, all `D-*`). Highest-impact ones:
-  D-ALL-1 (default stakes), D-SW-1 (Swap Hold'em), D-TEM-1 (Tempest numbers), D-CHI-1 (Chicago spade = hole
-  cards only), D-357-1 (3-5-7 setup), D-DB-1 (bomb pot), D-BJ-1 (bank strategy).
-- **OQ-9** Stun cap: the Bible says "matches the pot up to $10. This value may change during play." Is $10 a
-  fixed house cap, or set per game by the chooser?
-- **OQ-10** Web turn-timer defaults (30 s + 60 s bank) and timeout actions (D-WEB-4).
-- **OQ-11** Deployment target: server OS/architecture, Docker availability, reverse proxy, domain, Discord app
-  credentials, and whether to restrict sign-in to a Discord server (guild id).
+- ~~OQ-7~~ Resolved (2026-11-10): the ISMCTS opponent model by default; an option to choose a preset or a stored
+  player's tendencies comes with opponent modeling (handbook backlog #2).
+- **OQ-8** Partly resolved (2026-11-10). The owner confirmed D-ALL-1 (FTQ structure for every game except Texas
+  Hold'em), D-SW-1, D-TEM-1, D-CHI-1 (any of the 7 cards), D-CHI-2, D-357-1, D-DB-1, D-DB-2, D-BJ-1, D-BJ-2. The other
+  `D-*` decisions in `game-catalog.md` §5 stay provisional and are flagged in each family PR.
+- ~~OQ-9~~ Resolved (2026-11-10): the stun cap starts at $10, and within one hand each additional stunned player's
+  cap is $N higher; the chooser picks N per game. Details and D-STUN-1/2: `game-catalog.md` §3.
+- ~~OQ-10~~ Resolved (2026-11-10): 30 s per decision + 60 s time bank per game; timeout = check, else fold;
+  declarations default High; host can change per table.
+- ~~OQ-11~~ Resolved (2026-11-10): Linux x86-64 + Docker; Caddy bundled in compose for TLS; domain set at deploy
+  time; sign-in restricted to the owner's Discord server; the owner creates the Discord app using `deploy/README.md`.
 
 ## 12. Glossary
 
