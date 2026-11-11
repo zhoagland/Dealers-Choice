@@ -209,6 +209,13 @@ pub trait Transport { fn decide(&mut self, req: &DecisionRequest) -> Result<Vec<
   the critical path is backlog.
 - **Observed bias (2026-10-10 smoke test):** ISMCTS opponent nodes over-fold to aggression,
   so the coach over-rewards bluffing (e.g. "raise 9-high" scored about 12 bb better than calling).
+- **Rollout fix (backlog #1, 2026-11-11):** ISMCTS now defaults to `Rollout::Heuristic`, which uses the
+  game's `decision_context` hand-strength category below the tree: facing a bet after the first round with
+  nothing it mostly folds; with trips+ it sometimes raises; with two pair+ and no bet it mostly bets; games
+  without a strength signal keep check/call-down. Measured on a heads-up flop (9c5d on Kh7s2d, checked to
+  hero, 60 k playouts): the best bluff's EV fell from +0.69 to +0.41 bb (less over-rewarded), while
+  check/call went from −0.48 to −1.72 bb (±0.18, few visits). `dc spot --rollout check-call` reproduces the
+  old numbers. Opponent-model determinization (backlog #2) remains the bigger fix.
   Fix candidates: a better rollout policy, opponent-model-weighted determinization (FR-PA-5).
 - **Opponent model caveat (OQ-7):** the evaluation assumes opponents play like MO-ISMCTS does. The
   coach says "against this bot's model," not "GTO."

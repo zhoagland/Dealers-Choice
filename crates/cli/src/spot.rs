@@ -31,6 +31,9 @@ pub struct SpotArgs {
     /// Parallel searches (default: all cores).
     #[arg(long)]
     pub threads: Option<usize>,
+    /// Rollout policy below the search tree: `heuristic` (default) or `check-call` (the old one).
+    #[arg(long, default_value = "heuristic")]
+    pub rollout: String,
 }
 
 #[derive(Deserialize)]
@@ -70,13 +73,17 @@ fn cards(s: &str) -> Result<Vec<Card>, String> {
         .collect()
 }
 
-pub fn run(args: SpotArgs) -> CliResult {
-    let text =
-        std::fs::read_to_string(&args.file).map_err(|e| format!("{}: {e}", args.file.display()))?;
-    let spec: SpotFile =
-        toml::from_str(&text).map_err(|e| format!("{}: {e}", args.file.display()))?;
-    let game = Holdem::new(Config::default());
+/// One evaluated action: (description, EV, SE, visits).
+pub type Row = (String, f64, f64, u32);
 
+/// Evaluate one spot: (what the hero sees, actions ranked best first).
+fn evaluate(
+    spec: &SpotFile,
+    playouts: u32,
+    threads: usize,
+    check_call: bool,
+) -> Result<(String, Vec<Row>), String> {
+    let game = Holdem::new(Config::default());
     if spec.stacks.len() != spec.seats as usize {
         return Err(format!(
             "{} stacks for {} seats",
@@ -122,26 +129,22 @@ pub fn run(args: SpotArgs) -> CliResult {
     let obs = game.observe(&state, hero);
     let mut legal = Vec::new();
     game.legal_actions(&state, &mut legal);
-    println!("{}", game.describe_observation(&obs));
-
-    let threads = args
-        .threads
-        .unwrap_or_else(rayon::current_num_threads)
-        .max(1);
-    let total = args.playouts.unwrap_or(spec.playouts);
-    let per = (total / threads as u32).max(100);
+    let per = (playouts / threads as u32).max(100);
     let results: Vec<_> = (0..threads)
         .into_par_iter()
         .map(|t| {
-            let mut search = Ismcts::<Holdem>::new(IsmctsConfig::default());
+            let mut config = IsmctsConfig::default();
+            if check_call {
+                config.rollout = bots::ismcts::Rollout::CheckCallDown;
+            }
+            let mut search = Ismcts::<Holdem>::new(config);
             search.sampler = Box::new(sampler.clone());
             let mut rng = derive_rng(spec.seed, t as u64, Stream::Custom(9));
             search.evaluate(&game, &obs, &legal, Budget::Playouts(per), &mut rng)
         })
         .collect();
-
     // Visit-weighted mean per action; SE of a weighted mean of independent estimates.
-    let mut rows: Vec<(String, f64, f64, u32)> = legal
+    let mut rows: Vec<Row> = legal
         .iter()
         .map(|&a| {
             let parts: Vec<_> = results
@@ -160,7 +163,109 @@ pub fn run(args: SpotArgs) -> CliResult {
         })
         .collect();
     rows.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    Ok((game.describe_observation(&obs), rows))
+}
+
+/// A batch of spots (FR-SP-6): `[[spots]]` entries, each a spot plus a `name`.
+#[derive(Deserialize)]
+struct GridFile {
+    spots: Vec<NamedSpot>,
+}
+
+#[derive(Deserialize)]
+struct NamedSpot {
+    name: String,
+    #[serde(flatten)]
+    spot: SpotFile,
+}
+
+/// Evaluate every spot of a grid file and write an HTML table (returns its path).
+pub fn run_grid(
+    file: &std::path::Path,
+    out: &std::path::Path,
+    playouts: Option<u32>,
+    threads: usize,
+) -> Result<std::path::PathBuf, String> {
+    let text = std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let grid: GridFile = toml::from_str(&text).map_err(|e| format!("{}: {e}", file.display()))?;
+    let mut body = String::new();
+    for (i, ns) in grid.spots.iter().enumerate() {
+        let total = playouts.unwrap_or(ns.spot.playouts);
+        let (_, rows) = evaluate(&ns.spot, total, threads, false)?;
+        println!(
+            "[{}/{}] {}: best {} ({:+.3})",
+            i + 1,
+            grid.spots.len(),
+            ns.name,
+            rows[0].0,
+            rows[0].1
+        );
+        let best = rows[0].1;
+        body += &format!(
+            "<h2>{}</h2><p class=note>hero {} · board {} · {} playouts · EV in big blinds vs the given ranges</p><table><tr><th>Action</th><th>EV</th><th>± SE</th><th>vs best</th><th>Visits</th></tr>",
+            esc(&ns.name),
+            esc(&ns.spot.hero_cards),
+            esc(if ns.spot.board.is_empty() {
+                "-"
+            } else {
+                &ns.spot.board
+            }),
+            total
+        );
+        for (a, q, se, v) in &rows {
+            body += &format!(
+                "<tr><td>{}</td><td>{q:+.3}</td><td>{se:.3}</td><td>{:+.3}</td><td>{v}</td></tr>",
+                esc(a),
+                q - best
+            );
+        }
+        body += "</table>";
+    }
+    let html = format!(
+        "<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content='width=device-width, initial-scale=1'><title>Spot Grid</title><style>:root{{color-scheme:light dark}}body{{font:14px/1.45 system-ui,sans-serif;max-width:900px;margin:0 auto;padding:24px 16px;background:Canvas;color:CanvasText}}table{{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}}td,th{{padding:5px 8px;border-top:1px solid #8884;text-align:left}}.note{{opacity:.7;font-size:12px}}</style></head><body><h1>Spot grid</h1>{body}</body></html>"
+    );
+    if let Some(p) = out.parent() {
+        std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(out, html).map_err(|e| e.to_string())?;
+    Ok(out.to_path_buf())
+}
+
+fn esc(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+pub fn run(args: SpotArgs) -> CliResult {
+    let threads = args
+        .threads
+        .unwrap_or_else(rayon::current_num_threads)
+        .max(1);
+    let check_call = match args.rollout.as_str() {
+        "heuristic" => false,
+        "check-call" => true,
+        r => {
+            return Err(format!(
+                "unknown rollout {r:?}: use heuristic or check-call"
+            ));
+        }
+    };
+    let text =
+        std::fs::read_to_string(&args.file).map_err(|e| format!("{}: {e}", args.file.display()))?;
+    if text.contains("[[spots]]") {
+        let out = args.file.with_extension("grid.html");
+        let path = run_grid(&args.file, &out, args.playouts, threads)?;
+        println!("grid: {}", path.display());
+        return Ok(());
+    }
+    let spec: SpotFile =
+        toml::from_str(&text).map_err(|e| format!("{}: {e}", args.file.display()))?;
+    let total = args.playouts.unwrap_or(spec.playouts);
+    let (seen, rows) = evaluate(&spec, total, threads, check_call)?;
+    println!("{seen}");
     let best = rows[0].1;
+    let per = (total / threads as u32).max(100);
     println!(
         "\n{} playouts on {threads} threads; EV in big blinds vs the given ranges:",
         per as u64 * threads as u64

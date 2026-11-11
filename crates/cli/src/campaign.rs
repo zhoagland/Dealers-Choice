@@ -124,6 +124,9 @@ pub struct CampaignFile {
     /// Blueprint campaigns: MCCFR iterations per game.
     #[serde(default)]
     pub iterations: Option<u64>,
+    /// Study campaigns: a spot grid (`dc spot` file with `[[spots]]`) evaluated into the report.
+    #[serde(default)]
+    pub spots: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -702,7 +705,14 @@ fn study(c: &CampaignFile, root: &DataRoot) -> CliResult {
         seed: Some(c.seed),
         threads: None,
     };
-    analyze::run(analyze::AnalyzeCmd::Run(args), root)
+    analyze::run(analyze::AnalyzeCmd::Run(args), root)?;
+    if let Some(grid) = &c.spots {
+        let out = root.0.join("reports").join(&c.name).join("spots.html");
+        let threads = rayon::current_num_threads();
+        let path = crate::spot::run_grid(grid, &out, None, threads)?;
+        println!("spot grid: {}", path.display());
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------

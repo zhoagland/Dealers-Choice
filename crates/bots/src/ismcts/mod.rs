@@ -48,7 +48,7 @@ impl Default for IsmctsConfig {
     fn default() -> IsmctsConfig {
         IsmctsConfig {
             exploration: 0.7,
-            rollout: Rollout::CheckCallDown,
+            rollout: Rollout::Heuristic,
             root_min_visits: 0,
         }
     }

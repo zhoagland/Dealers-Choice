@@ -109,8 +109,11 @@ Heads-up ladders don't fit multiway games, and a full round robin of 10 presets 
 - **Decision grids:** `dc spot` in batch: a TOML grid of spots (stack/pot/position/hand) → ranked actions with
   EV ± SE per cell. Uses the coach's budget (FR-EV-5).
 - Known bias: ISMCTS opponent models over-fold and under-value checks (handbook §7). Study reports print that
-  caveat, and S5 depends on backlog #1 (better rollouts) for credible numbers. **S5 starts after rollout
-  improvements land.**
+  caveat. Backlog #1 (strength-aware rollouts) landed 2026-11-11 (`bots.md` §2 note).
+- **Built (2026-11-11):** `kind = "study"` campaigns run `dc analyze` (starting-hand and decision dashboards
+  for every game with analysis hooks; scripted games now report decisions by betting round and hand
+  strength) and, with `spots = "<grid.toml>"`, evaluate a spot grid into `reports/<name>/spots.html`
+  (`dc spot <grid.toml>` with `[[spots]]` entries does the same on its own).
 
 ### 4.4 Blueprints (S6)
 MCCFR needs small games or abstraction (bots.md §3).

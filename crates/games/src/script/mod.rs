@@ -3560,6 +3560,79 @@ impl Game for Scripted {
         s.down[seat.index()].iter().copied().collect()
     }
 
+    /// Strength for analysis and rollouts: the high-hand category of the seat's cards plus the
+    /// first board (games whose first share is ranked high), by betting round.
+    fn decision_context(&self, s: &State, seat: Seat) -> Option<engine::DecisionContext> {
+        let rule = self.shares().first()?;
+        if !matches!(rule.ranking, Ranking::High) {
+            return None;
+        }
+        let mut cards: Vec<Card> = s.own(seat).into_iter().collect();
+        if let Some(b) = s.boards.first() {
+            cards.extend(b.iter().copied());
+        }
+        let wild = self.wild_for(s, seat);
+        let (nat, w) = cards.iter().copied().collect::<CardSet>().split_wild(wild);
+        let strength = if nat.len() + w >= 5 {
+            let any = ShareRule {
+                build: Build::Own,
+                ..*rule
+            };
+            hand::share_value(&any, &cards, &[], wild)?.category() as u8
+        } else {
+            // Fewer than five cards: count pairs and trips among them.
+            let mut counts = [0u8; 13];
+            for c in nat.iter() {
+                counts[c.rank() as usize] += 1;
+            }
+            let top = counts.iter().copied().max().unwrap_or(0) + w as u8;
+            match top {
+                0 | 1 => 0,
+                2 => 1,
+                3 => 3,
+                _ => 7,
+            }
+        };
+        Some(engine::DecisionContext {
+            street: s.streets.saturating_sub(1),
+            board: 0,
+            strength,
+            pot: s.betting.pot() + Chips(s.carry.pot),
+            street_committed: s.betting.street_committed(seat),
+            stack: s.betting.stacks()[seat.index()],
+        })
+    }
+
+    fn analysis_labels(&self) -> engine::AnalysisLabels {
+        let rounds = self
+            .script
+            .steps
+            .iter()
+            .filter(|st| {
+                matches!(
+                    st,
+                    Step::Bet
+                        | Step::RedRiver { .. }
+                        | Step::TakeRounds { .. }
+                        | Step::HitRounds { .. }
+                )
+            })
+            .count()
+            .max(1);
+        engine::AnalysisLabels {
+            start_classes: Vec::new(),
+            start_grid: Vec::new(),
+            streets: (1..=rounds.max(10))
+                .map(|k| format!("betting round {k}"))
+                .collect(),
+            boards: vec!["any".into()],
+            strengths: engine::Category::ALL
+                .iter()
+                .map(|c| c.to_string())
+                .collect(),
+        }
+    }
+
     fn eval_unit(&self) -> Chips {
         Chips(100)
     }
