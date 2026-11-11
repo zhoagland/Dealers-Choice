@@ -216,6 +216,7 @@ showdown, burns not modelled. **D-HE-1** Hold'em variants play best five of hole
 | `five_21` | 5.5/21.5 | as 7/27 with targets 5.5 and 21.5 | closest without going over | D-727-1/2/3, `bluff_bust` |
 | `numbers` | Numbers | 6 down; 4 middle flips throw away matching and neighbouring ranks; gin scoops | high/low card totals, declare | D-NUM-1/2/3, `five_cards`, `seven_cards` |
 | `booray` | Whooh Ray for Booray | 5 cards (dealer's last face up = trump); In/Out; draw; 5 tricks | 3 tricks scoop; no trick fries; others pay $1 | D-BOO-1..5, `out_is_out` |
+| `blackjack` | Blackjack | own driver (`blackjack.rs`): chooser is the bank, sets the max; bets, hit/stand/double/split | vs the bank; blackjack 3:2 | D-BJ-1/2 (owner), D-BJ-3..7 |
 
 ## Open questions
 - ~~G-1~~ Resolved: FTQ max 7 seats.

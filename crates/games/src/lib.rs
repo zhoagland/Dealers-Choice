@@ -2,6 +2,7 @@
 //! types. Plan: `docs/tech/games.md`. Contract: `docs/api/game-driver.md`.
 
 pub mod analysis_util;
+pub mod blackjack;
 pub mod ftq;
 pub mod holdem;
 pub mod kuhn;

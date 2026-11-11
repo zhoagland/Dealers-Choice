@@ -12,7 +12,7 @@ use std::fmt;
 use engine::Game;
 
 use crate::script::{self, Scripted, games::SCRIPTED_IDS};
-use crate::{ftq::FollowTheQueen, holdem::Holdem, kuhn::Kuhn, leduc::Leduc};
+use crate::{blackjack::Blackjack, ftq::FollowTheQueen, holdem::Holdem, kuhn::Kuhn, leduc::Leduc};
 
 /// Something to do with a game once its concrete type is known.
 pub trait GameVisitor<R> {
@@ -73,6 +73,7 @@ pub const GAME_IDS: &[&str] = &[
     "five_21",
     "numbers",
     "booray",
+    "blackjack",
 ];
 
 /// Build game `id` from `config` (a TOML table of that game's `Config`; `None` = defaults)
@@ -87,6 +88,7 @@ pub fn with_game<R>(
         "leduc" => Ok(visitor.visit(Leduc::new(parse_config(id, config)?))),
         "holdem_nl" => Ok(visitor.visit(Holdem::new(parse_config(id, config)?))),
         "ftq" => Ok(visitor.visit(FollowTheQueen::new(parse_config(id, config)?))),
+        "blackjack" => Ok(visitor.visit(Blackjack::new(parse_config(id, config)?))),
         id if SCRIPTED_IDS.contains(&id) => {
             let mut c: script::Config = parse_config(id, config)?;
             c.game = id.to_string();
