@@ -31,6 +31,10 @@ pub struct Conformance {
     /// Determinizations per seat per decision point (C4, C6).
     pub determinizations: usize,
     pub seed: u64,
+    /// Inverted information (Indian games): each seat sees everyone's cards except its own.
+    /// C4 then requires that a seat never sees its own face-down cards, instead of never
+    /// seeing anyone else's.
+    pub inverted: bool,
 }
 
 impl Default for Conformance {
@@ -42,6 +46,7 @@ impl Default for Conformance {
             max_steps: 1_000,
             determinizations: 4,
             seed: 0xC0FFEE,
+            inverted: false,
         }
     }
 }
@@ -370,6 +375,30 @@ fn play_one<G: Game>(
     (log, state)
 }
 
+/// C4 through the table view: which face-down cards may `q` see? Normally only its own; in an
+/// inverted (Indian) game, everyone's but its own.
+fn check_view_secrecy<G: Game>(game: &G, obs: &G::Observation, q: Seat, inverted: bool, ctx: &str) {
+    let view = game.view(obs);
+    for sv in &view.seats {
+        for slot in &sv.cards {
+            if let crate::view::CardSlot::Down(Some(c)) = slot {
+                if inverted {
+                    assert!(
+                        sv.seat != q,
+                        "C4 (inverted information) {ctx}: {q} can see its own face-down card {c}"
+                    );
+                } else {
+                    assert!(
+                        sv.seat == q,
+                        "C4 (no leaks) {ctx}: {q}'s view shows {}'s face-down card {c}",
+                        sv.seat
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// C6 (round-trip) and the data for C4 (leaks), at one decision point.
 #[allow(clippy::too_many_arguments)]
 fn check_determinize<G: Game>(
@@ -385,6 +414,7 @@ fn check_determinize<G: Game>(
     let mut legal2 = Vec::new();
     for q in (0..n).map(Seat) {
         let obs_q = game.observe(state, q);
+        check_view_secrecy(game, &obs_q, q, cfg.inverted, ctx);
         for _ in 0..cfg.determinizations {
             let s2 = game.determinize(&obs_q, &mut UniformSampler, rng);
             assert_eq!(
@@ -447,14 +477,17 @@ mod tests {
         decisions: Vec<(Seat, Act)>,
         /// Only the leaky variant fills this in.
         leaked: Vec<Card>,
+        /// Indian variant: every other seat's card (`None` for the observer and undealt seats).
+        others: Vec<Option<Card>>,
     }
 
     /// `LEAK = true` puts every card in every observation: a bug C4 must catch.
-    struct HighCard<const LEAK: bool> {
+    /// `INDIAN = true`: each seat sees everyone's card but its own (inverted information).
+    struct HighCard<const LEAK: bool, const INDIAN: bool = false> {
         meta: GameMeta,
     }
 
-    impl<const LEAK: bool> Game for HighCard<LEAK> {
+    impl<const LEAK: bool, const INDIAN: bool> Game for HighCard<LEAK, INDIAN> {
         type State = St;
         type Action = Act;
         type Observation = Obs;
@@ -561,10 +594,25 @@ mod tests {
             Obs {
                 seat,
                 n: s.n,
-                own: s.cards.get(seat.index()).copied(),
+                own: if INDIAN {
+                    None
+                } else {
+                    s.cards.get(seat.index()).copied()
+                },
                 dealt: s.cards.len(),
                 decisions: s.decisions.clone(),
                 leaked: if LEAK { s.cards.clone() } else { Vec::new() },
+                others: if INDIAN {
+                    (0..s.n as usize)
+                        .map(|i| {
+                            (i != seat.index())
+                                .then(|| s.cards.get(i).copied())
+                                .flatten()
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                },
             }
         }
         fn observer(&self, obs: &Obs) -> Seat {
@@ -573,6 +621,29 @@ mod tests {
         fn determinize(&self, obs: &Obs, sampler: &mut dyn HiddenSampler, rng: &mut DetRng) -> St {
             let cards: Vec<Card> = if LEAK {
                 obs.leaked.clone() // a leaky driver "knows" the answer
+            } else if INDIAN {
+                // Everyone else's card is known; only the observer's own is sampled.
+                let known: CardSet = obs.others.iter().flatten().copied().collect();
+                let own = if obs.seat.index() < obs.dealt {
+                    let h = sample_hidden_hands(
+                        sampler,
+                        &[(obs.seat, 1)],
+                        CardSet::FULL_DECK.difference(known),
+                        rng,
+                    );
+                    Some(h[0][0])
+                } else {
+                    None
+                };
+                (0..obs.dealt)
+                    .map(|i| {
+                        if i == obs.seat.index() {
+                            own.unwrap()
+                        } else {
+                            obs.others[i].unwrap()
+                        }
+                    })
+                    .collect()
             } else {
                 let mut known = CardSet::EMPTY;
                 if let Some(c) = obs.own {
@@ -623,7 +694,24 @@ mod tests {
                 viewer: obs.seat,
                 button: Seat(0),
                 to_act: None,
-                seats: Vec::new(),
+                seats: (0..obs.n as usize)
+                    .map(|i| {
+                        let mut v = crate::view::SeatView::new(Seat(i as u8), Chips(0), Chips(0));
+                        if i < obs.dealt {
+                            let known = if LEAK {
+                                Some(obs.leaked[i])
+                            } else if INDIAN {
+                                obs.others[i]
+                            } else if i == obs.seat.index() {
+                                obs.own
+                            } else {
+                                None
+                            };
+                            v.cards = vec![crate::view::CardSlot::Down(known)];
+                        }
+                        v
+                    })
+                    .collect(),
                 boards: Vec::new(),
                 pots: Vec::new(),
                 wilds: Vec::new(),
@@ -649,5 +737,29 @@ mod tests {
     #[should_panic(expected = "C4")]
     fn leaky_toy_game_is_caught() {
         check_conformance(&HighCard::<true>::new(()), &cfg());
+    }
+
+    fn indian() -> Conformance {
+        Conformance {
+            inverted: true,
+            ..cfg()
+        }
+    }
+
+    #[test]
+    fn indian_toy_game_passes_with_inverted_information() {
+        check_conformance(&HighCard::<false, true>::new(()), &indian());
+    }
+
+    #[test]
+    #[should_panic(expected = "C4 (no leaks)")]
+    fn indian_game_checked_as_normal_is_caught() {
+        check_conformance(&HighCard::<false, true>::new(()), &cfg());
+    }
+
+    #[test]
+    #[should_panic(expected = "C4 (inverted information)")]
+    fn seeing_your_own_card_in_an_indian_game_is_caught() {
+        check_conformance(&HighCard::<false, false>::new(()), &indian());
     }
 }

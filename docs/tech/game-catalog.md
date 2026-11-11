@@ -97,7 +97,10 @@ Engine work in G0, besides the trait:
   `high` and `low_a6`; one test checks every registered evaluator against its oracle (54-card deck, jokers,
   wild ranks). Hold'em and FTQ keep calling the fast functions directly; new families use the registry.
 - `engine::testing` conformance: C4 (no leaks) learns about inverted information (the observer's *own*
-  cards must vary across determinizations in Indian games; others' cards must not).
+  cards must vary across determinizations in Indian games; others' cards must not). **Done 2026-11-11:**
+  `Conformance::inverted` (set by Indian drivers' tests). At every decision C4 also checks each seat's
+  `view()`: normally a seat may see only its own face-down cards; when inverted, every face-down card but its
+  own. The toy high-card game has an Indian mode; tests prove both mistakes are caught.
 - Session: drive `UntilDone`, persist carry between hands, and support the "if you're out you're out"
   flag (a seat that folds is excluded from later hands of that game). **Done (2026-11-11):**
   `engine::GameCarry` drives the hands of one game for the CLI, the sim runner and conformance; two
