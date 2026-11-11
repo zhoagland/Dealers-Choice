@@ -74,8 +74,12 @@ Decisions:
 Engine work in G0, besides the trait:
 - `Card`: indices 52 = red joker, 53 = black joker; `Deck::with_jokers()`. Evaluators treat a joker as
   "wild" only when the game passes it in the wild set. Golden RNG test unchanged for 52-card decks.
-- `pot::Penalty { seat, amount }` and `stun_amount(pot, cap)` per Bible ("matches the pot up to $10").
-  Bankroll-model games: a stun larger than the seat's stack takes the stack (D-G0-2).
+- `pot::Penalty { seat, amount }` and `stun_amounts(pot_before, stunned_in_order, base_cap, step)` per the
+  stun rule in §3 (cap $10, +$N per additional stunner in the same hand).
+- Both-declaration fallback (OQ-3, owner decision): if every remaining contestant failed a Both declaration,
+  the pot is **split evenly** among them (today it's split as hi/lo). Changes `pot::award_declared`; FTQ's
+  `meta.version` bumps.
+- Optional show (G-3): losing players may Show or Muck after required shows.
 - `pot::award_shares`: a pot split into named shares (High, Low, Top board, Spade, …), each with its own
   ranking and eligible set, with the existing Both-declaration rule applied per share pair. Replaces
   `award_declared` (kept as a thin wrapper).
@@ -93,17 +97,24 @@ including carry replay; CLI play unchanged.
 ## 3. Defaults for games the Bible doesn't give stakes for
 
 The Bible specifies stakes only for Hold'em ($0.50/$1 blinds, $20 table stake) and the dealer ante.
-FTQ's house structure was confirmed separately (A7). For every other game, unless its section says
-otherwise (**D-ALL-1**, flagged for owner review):
+FTQ's house structure was confirmed separately (A7).
 
-| Family | Forced bets | Structure | Stake model |
-|---|---|---|---|
-| Omaha / board games | dealer ante $2 only | **Pot-limit** (the Bible names "Pot Limit Omaha"), min bet $0.50 | Bankroll |
-| Hold'em variants | as Hold'em: $0.50/$1 blinds + dealer ante | No-limit | TableStake $20, Orbit |
-| Draw, stud, misc. poker | dealer ante $2 only | FTQ spread: $0.50–$2 increments, max 4 bets per street | Bankroll |
-| Numbers, Blackjack, Booray, drop games | per section | per section | Bankroll |
+**D-ALL-1 (owner decision 2026-11-10): every game except Texas Hold'em uses the FTQ structure**:
+dealer ante $2 only, spread limit with $0.50–$2 increments, at most 4 bets/raises per street, bankroll
+stake model, `SingleHand` length. This includes the Omaha family (the Bible's name "Pot Limit Omaha" is kept;
+`Structure::PotLimit` is available as a config flag) and the Hold'em variants. The only exceptions are sections
+that state their own money rules: Tempest (D-TEM-1), Iron Cross ($1 ante), 3-5-7 and 3-2-1 Drop (antes + stuns),
+Bid/Push/43/Scare-a-moosh (their payments), Blackjack (bank and max bet), Booray.
+
+**Stuns (owner decision, OQ-9):** a stun = the pot, capped. The cap starts at **$10**. Within one hand, each
+additional stunned player's cap is **$N higher** than the previous one's (1st: $10, 2nd: $10 + N, 3rd: $10 + 2N…),
+and it resets every hand. The chooser picks N when choosing the game (`Config::stun_step`, default $0).
+**D-STUN-1** every stun in a hand is measured against the pot *before* that hand's stuns are paid. **D-STUN-2**
+stunned players are ordered starting left of the dealer. **D-G0-2** a stun larger than the seat's stack takes the stack.
 
 Other cross-game defaults:
+- **Optional show (G-3, owner decision):** after required shows, each losing player may Show or Muck
+  (CLI and web; bots always muck). Shown cards are public in hand history.
 - **D-ALL-2 Low hands use A-6** (house rule from PRD §4) with **no qualifier** (no "8 or better"); the Bible never
   mentions one. Exception: 2-7 games.
 - **D-ALL-3 Hi/lo games declare.** Where a section's objective says "best high or best low" but its game-play
@@ -123,7 +134,7 @@ previous one.
 | Milestone | Family | New mechanics | Games | # |
 |---|---|---|---|---|
 | G0 | API v2 foundation | K1–K4 framework, K6, K14 | — (migrates 4 existing games) | 0 |
-| G1 | Omaha | Omaha 2o2 evaluator (high + A-6 low), pot-limit configs | Pot Limit Omaha, 5 Card Omaha, Courchevel, Red River, PLO Double Board Bomb Pot | 5 |
+| G1 | Omaha | Omaha 2o2 evaluator (high + A-6 low); FTQ structure (pot-limit as a config flag) | Pot Limit Omaha, 5 Card Omaha, Courchevel, Red River, PLO Double Board Bomb Pot | 5 |
 | G2 | Board shapes | Geometry evaluator (named lines on a board layout) | Elevator, Wheel of Death, Spit, Industrial Elevator, Iron Cross | 5 |
 | G3 | Hold'em twists | Short-deck evaluator, public folded cards | 6+ Hold'em, Showtime Hold'em, Reverse Poker, Split Hold'em | 4 |
 | G4 | Draw & discard | K7 discard/draw/keep, 2-7 evaluator, Badugi evaluator | 5 Card Draw, Triple Draw, 2-7 Single Draw, 2-7 Triple Draw, Badugi, 3 Blind Mice, Crazy Pineapple, Mama's Favorite, Swap Hold'em, Fusion | 10 |
@@ -158,10 +169,9 @@ is provisional and listed in the PR for the owner to overrule. Overruling one = 
   is always dealt, so the hand has at least 6 board cards. **D-RR-2** hands use 2o2 + best 3 of *all* board cards.
   **D-RR-3** if the deck runs out, the board ends (termination). Declaration hi/lo.
 - **PLO Double Board Bomb Pot**: two boards; declare Top/Bottom/Both per board (K6). "Bomb pot" is not defined in the
-  Bible. **D-DB-1** bomb pot = every seat antes $1 before the deal, with no preflop betting round (common usage;
-  but the game-play list has "Round of betting on potential", so the default is **ante $1 and keep the preflop
-  round**; flag). **D-DB-2** the objective says "best high or best low" but the declaration is Top or Bottom board:
-  each board's half goes to the best *high* hand on that board. Variations: `deal_boards_separately`, `dump_two`.
+  Bible. **D-DB-1 (confirmed)** every seat antes $1 before the deal (plus the dealer ante), and the preflop betting round
+  is kept. **D-DB-2 (confirmed)** declare Top, Bottom, or Both boards; each board's half goes to the best *high* hand
+  among the seats that declared it. Variations: `deal_boards_separately`, `dump_two`.
 
 ### G2 Board shapes
 - **Elevator**: H of 7 cards. Valid lines: left column (3), right column (3), middle row (3, through the blue
@@ -202,10 +212,9 @@ is provisional and listed in the PR for the owner to overrule. Overruling one = 
   after the flop. **D-CP-1** deal 3, discard 1 after the flop (standard Crazy Pineapple).
 - **Mama's Favorite**: 6 cards split into 3 secret pairs, discard one pair after the flop and another after the
   turn. **D-MF-1** the split is a hidden choice (15 ways); discarded pairs are not shown.
-- **Swap Hold'em**: "before any player folds they are given the option to swap one or both hole cards". **D-SW-1**
-  any time a player would fold, they may instead pay nothing, swap 1 or 2 hole cards with new ones from the deck,
-  and remain in the hand by calling (the swap replaces the fold, at most once per street). Most ambiguous rule in
-  the catalog; flag.
+- **Swap Hold'em**: "before any player folds they are given the option to swap one or both hole cards". **D-SW-1 (confirmed)**
+  any time a player would fold, they may instead swap 1 or 2 hole cards for new ones from the deck and stay in
+  the hand by calling. At most once per street.
 - **Fusion**: overview text is a copy of Tempest; game play is Hold'em plus one extra hole card after the flop and
   after the turn. **D-FU-1** implement the game-play list (4 hole cards by the river, standard Hold'em hand
   construction: best 5 of hole + board, any number from either). Variation flag `hi_lo`.
@@ -222,10 +231,10 @@ is provisional and listed in the PR for the owner to overrule. Overruling one = 
 
 ### G6 Stud variants
 - **7 Card Stud / Razz / Chicago High / Chicago Low**: FTQ structure without wilds. **D-STUD-1** first to act =
-  best board showing (high games) or lowest board showing (Razz), as in FTQ. **D-CHI-1** "highest/lowest spade"
-  counts **face-down spades only** (the traditional Chicago rule); flag, since the Bible doesn't say. **D-CHI-2**
-  Chicago Low's "lowest" means Ace is high (2♠ is lowest); flag. Spade half goes to that player even if they lose
-  the hand half; a player must reach showdown to win it.
+  best board showing (high games) or lowest board showing (Razz), as in FTQ. **D-CHI-1 (confirmed)** "highest/lowest spade"
+  counts spades among **all 7 cards**, face up or down. **D-CHI-2 (confirmed)** in Chicago Low, Ace is high, so 2♠
+  is the lowest. A player must reach showdown to win the spade half; if no player at showdown has a spade, the
+  hand winner takes the whole pot. The spade half is won even if that player loses the hand half.
 - **Baseball**: 3s and 6s wild; a face-up 4 gives an extra card. **D-BB-1** the player chooses whether that extra
   card is up or down. Hi/lo declaration. (No "buy the 3" rule; it isn't in the Bible.)
 - **Low in the Hole**: wild = the lower of the two hole cards (Ace high), and matching up cards are wild too. On 7th
@@ -255,21 +264,22 @@ is provisional and listed in the PR for the owner to overrule. Overruling one = 
 - **3-2-1 Drop**: ante, 3-card hands, red kings wild, simultaneous drop. Lone player vs the pot's dummy hand; losers
   match the pot (stun). **D-DROP-1** with 2+ players in, the best hand takes the pot and every other player who
   stayed in pays a stun into the next hand's pot. **D-DROP-2** stun = pot up to $10. Variation: orbit stun mode.
-- **3-5-7**: the Bible's Setup line contradicts itself ("three cards... 4 cards and $1 ante"). **D-357-1** deal 3,
-  $1 ante. Rounds of 3 (3s wild, no straights/flushes), 5 (5s wild), 7 cards (7s wild, best 5), then reshuffle.
+- **3-5-7**: the Bible's Setup line contradicts itself ("three cards... 4 cards and $1 ante"). **D-357-1 (confirmed)** deal 3,
+  with a $1 ante per player at the start of each 3-5-7 cycle. Rounds of 3 (3s wild, no straights/flushes), 5 (5s wild), 7 cards (7s wild, best 5), then reshuffle.
   Play/drop is simultaneous; losers who played get stunned; a lone player gets a strike; 3 strikes wins the pot.
 - **Scare-a-moosh**: starting left of the dealer, a player may name the game (high, low, high numbers, low numbers)
   and price (≤ $2) or pass. In/out, one draw, one bet, showdown; a declarer who doesn't win gets stunned; the pot
   carries until the declarer wins. **D-SAM-1** everyone who's in pays the price into the pot. **D-SAM-2** if all
   pass, redeal (counts toward `max_hands`).
 - **Tempest Hold'em**: the Bible describes escalating antes, a Giant Blind, all-in-or-fold, and a 10-Giant-Blind
-  cap, but the numbers are missing. **D-TEM-1** Giant Blind $2, ante starts at $0.50 and rises $0.50 each hand
-  until a hand reaches showdown, cap 10 Giant Blinds. Most-underspecified game; flagged.
+  cap, but the numbers are missing. **D-TEM-1 (confirmed)** Giant Blind $2; ante starts at $0.50 and rises $0.50 each hand
+  until a hand reaches showdown, then resets; cap 10 Giant Blinds = $20 per player per hand.
 
 ### G9 Numbers & house
-- **Blackjack**: the chooser is the bank and sets the max bet. **D-BJ-1** the bank plays a fixed rule: hit soft
-  16 or less, stand on 17. **D-BJ-2** each player picks a bet from $0.50 to the max before the deal; no insurance;
-  double down allowed on any first two cards; split once. This is not zero-sum between seats in the usual sense:
+- **Blackjack**: the chooser is the bank and sets the max bet. **D-BJ-1 (confirmed)** the bank plays a fixed rule: hit
+  16 or less, stand on all 17s. **D-BJ-2 (confirmed)** each player bets $0.50 up to the bank's max before the deal;
+  no insurance; double down on any first two cards; split a pair once; doubling after splitting aces is a config
+  flag (off), per the Bible's variation. This is not zero-sum between seats in the usual sense:
   the bank seat takes the other side of every bet, so payoffs still sum to zero.
 - **7/27** and **5.5/21.5**: faces 0.5, Aces 1 or 11; one up one down; hit/stand rounds with betting until everyone
   stands; declaration (low target, high target, both). **D-727-1** closest *without going over* wins each target; a

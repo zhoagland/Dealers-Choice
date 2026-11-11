@@ -146,5 +146,5 @@ tying low loses everything; a side nobody declared rolls to the other side.
 ## Open questions
 - ~~G-1~~ Resolved: FTQ max 7 seats.
 - ~~G-2~~ Resolved: Q followed by Q ⇒ Queens wild.
-- **G-3** Hold'em: can a player choose to show a losing hand (for table image)? It doesn't affect bots;
-  the CLI could offer it.
+- ~~G-3~~ Resolved (2026-11-10): yes, losing players may optionally show (CLI and web; bots muck). Implemented
+  in G0 for all games; see `game-catalog.md` §3.
