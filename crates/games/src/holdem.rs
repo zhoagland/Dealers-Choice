@@ -17,7 +17,7 @@ use smallvec::SmallVec;
 use engine::betting::{BetAction, BetSize, Betting, Structure};
 use engine::eval::high::eval_high;
 use engine::game::sample_hidden_hands;
-use engine::pot::{award_high, order_from_button, side_pots};
+use engine::pot::{award_high, build_pots, order_from_button};
 use engine::replay::replay_interleaved;
 use engine::{
     ActionClass, Card, CardSet, Chips, DetRng, Game, GameLength, GameMeta, HandSetup, HandValue,
@@ -191,7 +191,11 @@ impl State {
         let folded = (0..n)
             .filter(|&i| self.betting.is_folded(Seat(i as u8)))
             .fold(0u16, |m, i| m | 1 << i);
-        let pots = side_pots(self.betting.contributed(), folded);
+        let pots = build_pots(
+            &self.betting.live_contributed(),
+            self.betting.dead_total(),
+            folded,
+        );
         award_high(
             &pots,
             &self.showdown_values(),
@@ -831,6 +835,25 @@ mod tests {
         let obs = g.observe(&s, Seat(1));
         assert!(obs.shown[0].is_some(), "winner shows");
         assert!(obs.shown[2].is_none(), "loser who didn't show first mucks");
+    }
+
+    #[test]
+    fn dealer_ante_goes_to_the_winner_not_back_to_the_chooser() {
+        // Regression: dead money used to form its own side-pot layer, returning the chooser's
+        // dealer ante. Chooser = button = seat 0 posts $2 dead, then folds preflop.
+        let g = game();
+        let setup = HandSetup {
+            first_hand_of_game: true,
+            ..setup3()
+        };
+        let mut log = deal("As Ks Qs Js Ts 9s");
+        log.extend([Action::Fold, Action::Fold]);
+        let s = replay(&g, &setup, &log).unwrap();
+        assert_eq!(
+            g.payoffs(&s),
+            vec![Chips(-200), Chips(-50), Chips(250)],
+            "BB wins SB + dealer ante"
+        );
     }
 
     #[test]

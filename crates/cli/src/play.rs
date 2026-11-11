@@ -37,7 +37,7 @@ pub struct PlayArgs {
     #[arg(long)]
     pub game: Option<String>,
     /// Games bots may choose from.
-    #[arg(long, value_delimiter = ',', default_value = "holdem_nl")]
+    #[arg(long, value_delimiter = ',', default_value = "holdem_nl,ftq")]
     pub pool: Vec<String>,
     /// Show live hints (ranked actions with EV) before each of your decisions.
     #[arg(long)]

@@ -11,7 +11,7 @@ use std::fmt;
 
 use engine::Game;
 
-use crate::{holdem::Holdem, kuhn::Kuhn, leduc::Leduc};
+use crate::{ftq::FollowTheQueen, holdem::Holdem, kuhn::Kuhn, leduc::Leduc};
 
 /// Something to do with a game once its concrete type is known.
 pub trait GameVisitor<R> {
@@ -19,7 +19,7 @@ pub trait GameVisitor<R> {
 }
 
 /// All registered game ids, for help text and menus.
-pub const GAME_IDS: &[&str] = &["kuhn", "leduc", "holdem_nl"];
+pub const GAME_IDS: &[&str] = &["kuhn", "leduc", "holdem_nl", "ftq"];
 
 /// Build game `id` from `config` (a TOML table of that game's `Config`; `None` = defaults)
 /// and hand it to `visitor`.
@@ -32,6 +32,7 @@ pub fn with_game<R>(
         "kuhn" => Ok(visitor.visit(Kuhn::new(parse_config(id, config)?))),
         "leduc" => Ok(visitor.visit(Leduc::new(parse_config(id, config)?))),
         "holdem_nl" => Ok(visitor.visit(Holdem::new(parse_config(id, config)?))),
+        "ftq" => Ok(visitor.visit(FollowTheQueen::new(parse_config(id, config)?))),
         _ => Err(RegistryError::UnknownGame(id.to_string())),
     }
 }
