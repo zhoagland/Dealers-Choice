@@ -59,6 +59,11 @@ pub const GAME_IDS: &[&str] = &[
     "spit",
     "industrial_elevator",
     "iron_cross",
+    "baseball",
+    "low_in_the_hole",
+    "push",
+    "bullet",
+    "bid",
 ];
 
 /// Build game `id` from `config` (a TOML table of that game's `Config`; `None` = defaults)

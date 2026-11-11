@@ -197,6 +197,11 @@ showdown, burns not modelled. **D-HE-1** Hold'em variants play best five of hole
 | `spit` | Spit | 5 down; throw 1 into a middle of 9; flip one per street | 2o2 + any 3 middle, hi/lo declare | D-SPIT-1/2/3, `three_at_a_time` |
 | `industrial_elevator` | Industrial Elevator | 5 down; column of 4 crossed by a row | 2+3 or 3+2 from one line, high | D-IE-1/2, `five_in_elevator` |
 | `iron_cross` | Iron Cross | $1 ante; 4 down; one bet; cross of 5 turned | best 5 of hole + row or column | D-IC-1/2 |
+| `baseball` | Baseball | stud; face-up 4 earns an extra card (up or down) | 3s and 6s wild, hi/lo declare | D-BB-1/2 |
+| `low_in_the_hole` | Low in the Hole | stud; 7th card up or down by choice | lowest hole rank wild per seat, hi/lo declare | D-LH-1 |
+| `push` | Push | stud; push an up card on for $1, receiver keeps or replaces for $1 | hi/lo declare | D-PU-1/2, `buy_eighth` |
+| `bullet` | Bullet | jokers; 2 down, then take-a-card rounds to 5 | face-down jokers wild, face-up joker kills, hi/lo | D-BU-1/2/3 |
+| `bid` | Bid | 2 down; 5 rounds of middle cards picked in sealed-bid order | hi/lo declare | D-BID-1, `buy_eighth` |
 
 ## Open questions
 - ~~G-1~~ Resolved: FTQ max 7 seats.

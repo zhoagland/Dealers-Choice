@@ -59,6 +59,12 @@ pub const SCRIPTED_IDS: &[&str] = &[
     "spit",
     "industrial_elevator",
     "iron_cross",
+    // G6 Stud (special cards and choices)
+    "baseball",
+    "low_in_the_hole",
+    "push",
+    "bullet",
+    "bid",
 ];
 
 /// The script for `id`.
@@ -155,6 +161,11 @@ pub fn script(id: &str) -> Option<Script> {
         "spit" => spit(),
         "industrial_elevator" => industrial_elevator(),
         "iron_cross" => iron_cross(),
+        "baseball" => baseball(),
+        "low_in_the_hole" => low_in_the_hole(),
+        "push" => push(),
+        "bullet" => bullet(),
+        "bid" => bid(),
         _ => return None,
     })
 }
@@ -216,6 +227,10 @@ fn base(id: &'static str, name: &'static str, rules_ref: &'static str) -> Script
         layout: BoardLayout::Row,
         positions: 0,
         lines: Vec::new(),
+        four_extra: false,
+        up_joker_kills: false,
+        low_hole_wild: false,
+        hand_cards: 0,
     }
 }
 
@@ -1133,5 +1148,189 @@ fn iron_cross() -> Script {
         positions: 5,
         lines: vec![vec![0, 1, 2], vec![3, 1, 4]],
         ..base("iron_cross", "Iron Cross", "Poker Bible §Iron Cross")
+    }
+}
+
+// ----- G6 Stud variants (special cards and choices) -------------------------------------------
+
+/// The 7 Card Stud deal: 2 down, bet, 4 up with bets, 1 down, bet.
+fn stud_steps() -> Vec<Step> {
+    vec![
+        Down(2),
+        Bet,
+        Up(1),
+        Bet,
+        Up(1),
+        Bet,
+        Up(1),
+        Bet,
+        Up(1),
+        Bet,
+        Down(1),
+        Bet,
+    ]
+}
+
+fn wild_ranks(ranks: &[engine::Rank]) -> CardSet {
+    let mut w = CardSet::EMPTY;
+    for &r in ranks {
+        for su in engine::Suit::ALL {
+            w.insert(engine::Card::new(r, su));
+        }
+    }
+    w
+}
+
+fn buy_eighth(s: &mut Script) {
+    let at = s
+        .steps
+        .iter()
+        .position(|x| *x == Declare)
+        .unwrap_or(s.steps.len());
+    s.steps.splice(
+        at..at,
+        [
+            BuyCard {
+                up: Chips(500),
+                down: Chips(700),
+            },
+            Bet,
+        ],
+    );
+}
+
+/// Baseball: 7 Card Stud with 3s and 6s wild; a face-up 4 earns an extra card. Hi/lo declare.
+/// - **D-BB-1** the player chooses whether the extra card comes up or down; it is dealt after the
+///   street's other cards. No "buy the 3" rule (it isn't in the Bible).
+/// - **D-BB-2** max 6 seats so the deck can't run out (42 cards + at most 4 extras).
+fn baseball() -> Script {
+    let mut steps = stud_steps();
+    steps.push(Declare);
+    Script {
+        steps,
+        max_seats: 6,
+        order: ActOrder::BestBoard,
+        shares: vec![HIGH_OWN, LOW_OWN],
+        declare: Some(DeclareKind::HiLo),
+        wild: wild_ranks(&[engine::Rank::Three, engine::Rank::Six]),
+        four_extra: true,
+        boards: 0,
+        ..base(
+            "baseball",
+            "Baseball (hi/lo declare)",
+            "Poker Bible §Baseball",
+        )
+    }
+}
+
+/// Low in the Hole: each seat's lowest face-down card (ace high) is wild for that seat, and so
+/// are its face-up cards of that rank. The 7th card comes up or down by the player's choice.
+/// Hi/lo declare. **D-LH-1** the wild rank is recomputed from all face-down cards at showdown.
+fn low_in_the_hole() -> Script {
+    Script {
+        steps: vec![
+            Down(2),
+            Bet,
+            Up(1),
+            Bet,
+            Up(1),
+            Bet,
+            Up(1),
+            Bet,
+            Up(1),
+            Bet,
+            UpOrDown,
+            Bet,
+            Declare,
+        ],
+        max_seats: 7,
+        order: ActOrder::BestBoard,
+        shares: vec![HIGH_OWN, LOW_OWN],
+        declare: Some(DeclareKind::HiLo),
+        low_hole_wild: true,
+        boards: 0,
+        ..base(
+            "low_in_the_hole",
+            "Low in the Hole (hi/lo declare)",
+            "Poker Bible §Low in the Hole",
+        )
+    }
+}
+
+/// Push: 7 Card Stud where, on 3rd to 6th street, a player dealt an up card may pay $1 to push it
+/// to the next player; the receiver keeps it or pays $1 for the next card instead. Hi/lo declare
+/// (D-ALL-3: the objective is high or low but the game play has no declaration). Max 6 seats.
+/// - **D-PU-1** the pusher then receives a fresh card, which can't be pushed; a card is pushed at
+///   most once.
+/// - **D-PU-2** the last seat served on a street can't push (nobody is left waiting for a card).
+/// - Replacing is offered only while the stock covers everyone's remaining cards.
+/// - Variation `buy_eighth` (the Bible's): an 8th card for $5 up or $7 down.
+fn push() -> Script {
+    let mut steps = vec![Down(2), Bet];
+    for _ in 0..4 {
+        steps.extend([PushStreet, Bet]);
+    }
+    steps.extend([Down(1), Bet, Declare]);
+    Script {
+        steps,
+        max_seats: 6,
+        order: ActOrder::BestBoard,
+        shares: vec![HIGH_OWN, LOW_OWN],
+        declare: Some(DeclareKind::HiLo),
+        hand_cards: 7,
+        boards: 0,
+        variants: vec![Variant {
+            name: "buy_eighth",
+            apply: buy_eighth,
+        }],
+        ..base("push", "Push (hi/lo declare)", "Poker Bible §Push")
+    }
+}
+
+/// Bullet: jokers in the deck; 2 cards down, then rounds of "take a card?" with betting after each
+/// (best board first) until everyone has 5 cards. A face-up joker kills the hand; a face-down joker
+/// is wild. Hi/lo declare.
+/// - **D-BU-1** extra cards come face up except the 5th, which comes face down.
+/// - **D-BU-2** a player who declines stays in and is offered again next round.
+/// - **D-BU-3** at most 6 rounds; after that short hands are filled (up, last down).
+fn bullet() -> Script {
+    Script {
+        steps: vec![Down(2), Bet, TakeRounds { target: 5, cap: 6 }, Declare],
+        max_seats: 8,
+        deck: DeckKind::WithJokers,
+        order: ActOrder::BestBoard,
+        shares: vec![HIGH_OWN, LOW_OWN],
+        declare: Some(DeclareKind::HiLo),
+        wild: CardSet::JOKERS,
+        up_joker_kills: true,
+        boards: 0,
+        ..base("bullet", "Bullet (hi/lo declare)", "Poker Bible §Bullet")
+    }
+}
+
+/// Bid: 2 down, bet; then five rounds of: one card per player still in turned face up in the
+/// middle, sealed bids for picking order (paid into the pot), picks in bid order, bet. Hi/lo
+/// declare. Max 7 seats.
+/// - **D-BID-1** bids are $0 to $5 in 50¢ units, placed in turn but hidden until all are in;
+///   ties pick in order from the dealer's left.
+/// - Variation `buy_eighth` (the Bible's).
+fn bid() -> Script {
+    let mut steps = vec![Down(2), Bet];
+    for _ in 0..5 {
+        steps.extend([BidRound { max_units: 10 }, Bet]);
+    }
+    steps.push(Declare);
+    Script {
+        steps,
+        max_seats: 7,
+        order: ActOrder::BestBoard,
+        shares: vec![HIGH_OWN, LOW_OWN],
+        declare: Some(DeclareKind::HiLo),
+        boards: 0,
+        variants: vec![Variant {
+            name: "buy_eighth",
+            apply: buy_eighth,
+        }],
+        ..base("bid", "Bid (hi/lo declare)", "Poker Bible §Bid")
     }
 }

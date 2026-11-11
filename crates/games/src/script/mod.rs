@@ -96,6 +96,18 @@ pub enum Step {
     FillPool { total: u8 },
     /// Spit: turn `n` random cards of the middle pile face up onto board `board`.
     FlipPool { board: u8, n: u8 },
+    /// Each seat still in chooses whether its next card comes face up or down (Low in the Hole).
+    UpOrDown,
+    /// Push: one up card per seat, each may be pushed on for $1 (D-PU-1/2).
+    PushStreet,
+    /// Bullet: rounds of "take a card?" then betting, until everyone has `target` cards
+    /// (at most `cap` rounds; D-BU-1..3).
+    TakeRounds { target: u8, cap: u8 },
+    /// Bid: one card per seat still in is turned face up in the middle; sealed bids (in 50¢
+    /// units, 0..=`max_units`) set the picking order (D-BID-1).
+    BidRound { max_units: u8 },
+    /// Each seat still in may buy one more card: face up for `up`, face down for `down`.
+    BuyCard { up: Chips, down: Chips },
     /// Red River (D-RR-1..3): one board card then a betting round, repeated while the card just
     /// dealt is red (and cards remain).
     RedRiver { board: u8 },
@@ -176,6 +188,41 @@ pub struct Script {
     pub positions: u8,
     /// Groups of board positions a hand may use together. Empty = any board cards.
     pub lines: Vec<Vec<u8>>,
+    /// Baseball: a face-up 4 earns an extra card, up or down by choice (D-BB-1).
+    pub four_extra: bool,
+    /// Bullet: a face-up joker kills the hand.
+    pub up_joker_kills: bool,
+    /// Low in the Hole: each seat's lowest face-down rank (ace high) is wild for it.
+    pub low_hole_wild: bool,
+    /// Cards each seat ends with (Push: replacements are only offered while the stock can
+    /// still cover everyone's remaining cards).
+    pub hand_cards: u8,
+}
+
+/// A public decision a seat must make right now (Baseball's extra card, Push, Bullet, Bid…).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Prompt {
+    /// 0 = face down, 1 = face up (Baseball extra card, Low in the Hole's 7th card).
+    UpOrDown,
+    /// 0 = keep the up card, 1 = pay $1 and push it on.
+    PushOrKeep,
+    /// 0 = keep the pushed card, 1 = pay $1 for the next card instead.
+    KeepOrReplace,
+    /// 0 = pass, 1 = take a card.
+    Take,
+    /// Pick a middle card by index.
+    Pick,
+    /// 0 = no, 1 = buy face up, 2 = buy face down.
+    Buy,
+}
+
+/// Push street bookkeeping: seats still to be served, in order.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum PushTask {
+    /// Give this seat its street card (or the pushed card waiting for it).
+    Serve(Seat),
+    /// Offer this seat the push of the card it was just dealt.
+    Offer(Seat),
 }
 
 /// A named rule variation: a change applied to the script.
@@ -249,6 +296,10 @@ pub enum Action {
     InOut(u8),
     /// Reveal order, as an index into the permutations of the seat's face-down cards.
     Order(u8),
+    /// An answer to the current [`Prompt`].
+    Choose(u8),
+    /// A sealed bid in 50¢ units (Bid).
+    Bid(u8),
 }
 
 /// The `idx`-th permutation (lexicographic) of `0..k`.
@@ -359,6 +410,8 @@ enum Slot {
     Pool,
     /// A random middle-pile card turned face up onto board `b`.
     PoolFlip(u8),
+    /// A face-up card into Bid's middle.
+    Middle,
 }
 
 #[derive(Clone, Debug)]
@@ -401,6 +454,18 @@ pub struct State {
     pool: CardSet,
     /// History indices of Spit throws.
     spits: Vec<usize>,
+    /// Public decisions waiting, first = now.
+    prompts: VecDeque<(Seat, Prompt)>,
+    push_tasks: VecDeque<PushTask>,
+    /// A pushed card waiting for the next seat.
+    incoming: Option<Card>,
+    /// Bullet: rounds done, and whether the current round is betting.
+    take_rounds: u8,
+    take_betting: bool,
+    /// Bid: the face-up middle cards, and the sealed bids.
+    pub middle: SmallVec<[Card; 9]>,
+    bids: Vec<Option<u8>>,
+    bid_phase: u8,
     pub betting: Betting,
     queue: VecDeque<Slot>,
     deal_log: Vec<Slot>,
@@ -596,6 +661,93 @@ impl Scripted {
                     s.queue.push_back(Slot::PoolFlip(board));
                 }
             }
+            Step::UpOrDown => {
+                s.prompts = s
+                    .live_from_left()
+                    .into_iter()
+                    .map(|p| (p, Prompt::UpOrDown))
+                    .collect();
+            }
+            Step::PushStreet => {
+                s.incoming = None;
+                s.push_tasks = s
+                    .live_from_left()
+                    .into_iter()
+                    .map(PushTask::Serve)
+                    .collect();
+            }
+            Step::TakeRounds { .. } => {
+                s.take_rounds = 0;
+                self.start_take_round(s);
+            }
+            Step::BidRound { .. } => {
+                s.bid_phase = 0;
+                for _ in s.live_from_left() {
+                    s.queue.push_back(Slot::Middle);
+                }
+            }
+            Step::BuyCard { .. } => {
+                s.prompts = s
+                    .live_from_left()
+                    .into_iter()
+                    .map(|p| (p, Prompt::Buy))
+                    .collect();
+            }
+        }
+    }
+
+    /// Bullet: offer a card to every seat still in that is short of the target.
+    fn start_take_round(&self, s: &mut State) {
+        let target = match self.script.steps[s.pc] {
+            Step::TakeRounds { target, .. } => target as usize,
+            _ => 5,
+        };
+        s.take_betting = false;
+        s.prompts = s
+            .live_from_left()
+            .into_iter()
+            .filter(|p| s.own(*p).len() < target)
+            .map(|p| (p, Prompt::Take))
+            .collect();
+    }
+
+    /// Push: serve the next seat (its street card, or the card pushed to it).
+    fn push_next(&self, s: &mut State) -> bool {
+        while let Some(task) = s.push_tasks.pop_front() {
+            match task {
+                PushTask::Serve(q) if s.betting.is_folded(q) => continue,
+                PushTask::Serve(q) => {
+                    if s.incoming.is_some() {
+                        s.prompts.push_back((q, Prompt::KeepOrReplace));
+                    } else {
+                        s.queue.push_back(Slot::Up(q));
+                        // The last seat served this street can't push (D-PU-2).
+                        let more = s
+                            .push_tasks
+                            .iter()
+                            .any(|t| matches!(t, PushTask::Serve(r) if !s.betting.is_folded(*r)));
+                        if more {
+                            s.push_tasks.push_front(PushTask::Offer(q));
+                        }
+                    }
+                    return true;
+                }
+                PushTask::Offer(q) => {
+                    if !s.betting.is_folded(q) && s.stock.len() >= 1 {
+                        s.prompts.push_back((q, Prompt::PushOrKeep));
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Pay up to `amount` into the pot (pushes, bids, bought cards).
+    fn pay(s: &mut State, p: Seat, amount: Chips) {
+        let a = amount.min(s.betting.stacks()[p.index()]);
+        if a > Chips::ZERO {
+            s.betting.post_dead(p, a);
         }
     }
 
@@ -678,6 +830,18 @@ impl Scripted {
                 }
                 return;
             }
+            if !s.prompts.is_empty() {
+                while s
+                    .prompts
+                    .front()
+                    .is_some_and(|&(p, _)| s.betting.is_folded(p))
+                {
+                    s.prompts.pop_front();
+                }
+                if !s.prompts.is_empty() {
+                    return;
+                }
+            }
             if s.pc >= self.script.steps.len() {
                 s.done = true;
                 return;
@@ -721,6 +885,86 @@ impl Scripted {
                 | Step::Flip { .. }
                 | Step::FillPool { .. }
                 | Step::FlipPool { .. } => true,
+                Step::UpOrDown | Step::BuyCard { .. } => true,
+                Step::PushStreet => {
+                    if self.push_next(s) {
+                        continue;
+                    }
+                    true
+                }
+                Step::TakeRounds { target, cap } => {
+                    if !s.take_betting {
+                        let first = self.first_to_act(s);
+                        s.betting.start_street(s.streets, first);
+                        s.streets += 1;
+                        s.take_betting = true;
+                    }
+                    if s.betting.to_act().is_some() {
+                        false
+                    } else {
+                        s.take_rounds += 1;
+                        let short: Vec<Seat> = s
+                            .live_from_left()
+                            .into_iter()
+                            .filter(|p| s.own(*p).len() < target as usize)
+                            .collect();
+                        if short.is_empty() {
+                            true
+                        } else if s.take_rounds < cap {
+                            self.start_take_round(s);
+                            continue;
+                        } else {
+                            // D-BU-3: out of rounds; short hands are filled (up, last down).
+                            for p in short {
+                                let have = s.own(p).len();
+                                for k in have..target as usize {
+                                    s.queue.push_back(if k + 1 == target as usize {
+                                        Slot::Down(p)
+                                    } else {
+                                        Slot::Up(p)
+                                    });
+                                }
+                            }
+                            s.pc += 1;
+                            s.entered = false;
+                            continue;
+                        }
+                    }
+                }
+                Step::BidRound { .. } => match s.bid_phase {
+                    // Middle cards are out: collect bids.
+                    0 => {
+                        s.bid_phase = 1;
+                        s.pending = s.live_from_left().into();
+                        continue;
+                    }
+                    1 => {
+                        while s.pending.front().is_some_and(|&p| s.betting.is_folded(p)) {
+                            s.pending.pop_front();
+                        }
+                        if !s.pending.is_empty() {
+                            return;
+                        }
+                        // Reveal and pay the bids; highest bid picks first, ties to the dealer's
+                        // left.
+                        let live = s.live_from_left();
+                        let mut order: Vec<(u8, usize, Seat)> = Vec::new();
+                        for (i, &p) in live.iter().enumerate() {
+                            let b = s.bids[p.index()].take().unwrap_or(0);
+                            Self::pay(s, p, Chips(50 * b as i64));
+                            s.sys_events.push((s.history.len(), Event::BidShown(p, b)));
+                            order.push((b, i, p));
+                        }
+                        order.sort_by_key(|&(b, i, _)| (std::cmp::Reverse(b), i));
+                        s.prompts = order
+                            .into_iter()
+                            .map(|(_, _, p)| (p, Prompt::Pick))
+                            .collect();
+                        s.bid_phase = 2;
+                        continue;
+                    }
+                    _ => true,
+                },
                 Step::RedRiver { board } => {
                     if !s.red_betting {
                         let first = self.first_to_act(s);
@@ -783,6 +1027,47 @@ impl Scripted {
         }
     }
 
+    /// The cards wild for `p`: the script's, plus (Low in the Hole) every card of the rank of
+    /// `p`'s lowest face-down card, ace high.
+    fn wild_for(&self, s: &State, p: Seat) -> CardSet {
+        let mut wild = self.script.wild;
+        if self.script.low_hole_wild
+            && let Some(r) = s.down[p.index()]
+                .iter()
+                .filter(|c| !c.is_joker())
+                .map(|c| c.rank())
+                .min()
+        {
+            for su in Suit::ALL {
+                wild.insert(Card::new(r, su));
+            }
+        }
+        wild
+    }
+
+    /// How many answers the current prompt has.
+    fn prompt_options(&self, s: &State) -> u8 {
+        match s.prompts.front() {
+            Some((_, Prompt::Pick)) => s.middle.len() as u8,
+            Some((_, Prompt::Buy)) if s.stock.is_empty() => 1,
+            Some((_, Prompt::Buy)) => 3,
+            Some((_, Prompt::KeepOrReplace)) => {
+                // Replacing takes one extra card: only while the stock covers everyone's
+                // remaining cards (the pushed card fills the receiver's own need).
+                let need: usize = s
+                    .live_from_left()
+                    .iter()
+                    .map(|&p| (self.script.hand_cards as usize).saturating_sub(s.own(p).len()))
+                    .sum::<usize>()
+                    .saturating_sub(1)
+                    + s.queue.len();
+                if s.stock.len() > need { 2 } else { 1 }
+            }
+            Some(_) => 2,
+            None => 0,
+        }
+    }
+
     /// Swap masks `p` may use now (Swap Hold'em), or none.
     fn swap_masks(&self, s: &State, p: Seat) -> Vec<u8> {
         if !self.script.swap_instead_of_fold
@@ -808,11 +1093,12 @@ impl Scripted {
         }
         for p in s.live_from_left() {
             let own = s.own(p);
+            let wild = self.wild_for(s, p);
             for (k, rule) in shares.iter().enumerate() {
                 let b = rule.board as usize;
                 let board: &[Card] = s.boards.get(b).map_or(&[], |x| x.as_slice());
                 out[k][p.index()] = if self.script.lines.is_empty() {
-                    hand::share_value(rule, &own, board, self.script.wild)
+                    hand::share_value(rule, &own, board, wild)
                 } else {
                     // Shaped board: the board cards must come from one line.
                     let pos = &s.board_pos[b];
@@ -826,7 +1112,7 @@ impl Scripted {
                                 .filter(|(_, at)| line.contains(at))
                                 .map(|(&c, _)| c)
                                 .collect();
-                            hand::share_value(rule, &own, &cards, self.script.wild)
+                            hand::share_value(rule, &own, &cards, wild)
                         })
                         .max()
                 };
@@ -991,6 +1277,14 @@ impl Game for Scripted {
             board_pos: vec![SmallVec::new(); self.script.boards as usize],
             pool: CardSet::EMPTY,
             spits: Vec::new(),
+            prompts: VecDeque::new(),
+            push_tasks: VecDeque::new(),
+            incoming: None,
+            take_rounds: 0,
+            take_betting: false,
+            middle: SmallVec::new(),
+            bids: vec![None; n],
+            bid_phase: 0,
             betting,
             queue: VecDeque::new(),
             deal_log: Vec::new(),
@@ -1010,8 +1304,11 @@ impl Game for Scripted {
         if s.done {
             return ToAct::Terminal;
         }
+        if let Some(&(p, _)) = s.prompts.front() {
+            return ToAct::Seat(p);
+        }
         match self.script.steps[s.pc] {
-            Step::Bet | Step::RedRiver { .. } => {
+            Step::Bet | Step::RedRiver { .. } | Step::TakeRounds { .. } => {
                 ToAct::Seat(s.betting.to_act().expect("advance left a closed street"))
             }
             _ => ToAct::Seat(*s.pending.front().expect("step with nobody pending")),
@@ -1023,6 +1320,14 @@ impl Game for Scripted {
         match self.to_act(s) {
             ToAct::Chance => out.extend(s.chance_pool().iter().map(Action::Deal)),
             ToAct::Terminal => {}
+            ToAct::Seat(_) if !s.prompts.is_empty() => {
+                out.extend((0..self.prompt_options(s)).map(Action::Choose))
+            }
+            ToAct::Seat(_) if matches!(self.script.steps[s.pc], Step::BidRound { .. }) => {
+                if let Step::BidRound { max_units } = self.script.steps[s.pc] {
+                    out.extend((0..=max_units).map(Action::Bid));
+                }
+            }
             ToAct::Seat(p) => match self.script.steps[s.pc] {
                 Step::Declare => out.extend(DECLARE_OPTIONS.map(Action::Declare)),
                 Step::PairUp => out.extend((0..15).map(Action::Arrange)),
@@ -1063,6 +1368,29 @@ impl Game for Scripted {
             (ToAct::Chance, Action::Deal(c)) if s.chance_pool().contains(c) => Ok(()),
             (ToAct::Chance, _) => Err(IllegalAction("expected a deal of an undealt card".into())),
             (ToAct::Terminal, _) => Err(IllegalAction("the hand is over".into())),
+            (ToAct::Seat(_), Action::Choose(k)) if !s.prompts.is_empty() => {
+                if k < self.prompt_options(s) {
+                    Ok(())
+                } else {
+                    Err(IllegalAction(format!(
+                        "choose one of the {} options",
+                        self.prompt_options(s)
+                    )))
+                }
+            }
+            (ToAct::Seat(_), _) if !s.prompts.is_empty() => {
+                Err(IllegalAction("answer the question first".into()))
+            }
+            (ToAct::Seat(_), a) if matches!(self.script.steps[s.pc], Step::BidRound { .. }) => {
+                match (self.script.steps[s.pc], a) {
+                    (Step::BidRound { max_units }, Action::Bid(b)) if b <= max_units => Ok(()),
+                    (Step::BidRound { max_units }, _) => Err(IllegalAction(format!(
+                        "bid 0 to {} (in 50¢ units)",
+                        max_units
+                    ))),
+                    _ => unreachable!(),
+                }
+            }
             (ToAct::Seat(p), a) => match (self.script.steps[s.pc], a) {
                 (Step::Declare, Action::Declare(k)) if k < 3 => Ok(()),
                 (Step::Declare, _) => Err(IllegalAction(format!(
@@ -1169,6 +1497,18 @@ impl Game for Scripted {
                     Slot::Pool => {
                         s.pool.insert(c);
                     }
+                    Slot::Middle => s.middle.push(c),
+                }
+                if let Slot::Up(p) = slot {
+                    if self.script.up_joker_kills && c.is_joker() {
+                        s.betting.fold_out(p);
+                    } else if self.script.four_extra
+                        && !c.is_joker()
+                        && c.rank() == Rank::Four
+                        && !s.stock.is_empty()
+                    {
+                        s.prompts.push_front((p, Prompt::UpOrDown));
+                    }
                 }
                 s.deal_log.push(slot);
                 None
@@ -1214,6 +1554,69 @@ impl Game for Scripted {
                         s.queue.push_back(Slot::Down(p));
                     }
                 }
+                Some(p)
+            }
+            Action::Choose(k) => {
+                let (p, prompt) = s.prompts.pop_front().expect("no prompt");
+                match prompt {
+                    Prompt::UpOrDown => {
+                        let slot = if k == 1 { Slot::Up(p) } else { Slot::Down(p) };
+                        s.queue.push_front(slot);
+                    }
+                    Prompt::PushOrKeep => {
+                        if k == 1 {
+                            Self::pay(s, p, Chips(100));
+                            s.incoming = s.up[p.index()].pop();
+                            // D-PU-1: the pusher gets a fresh card (which can't be pushed).
+                            s.queue.push_front(Slot::Up(p));
+                        }
+                    }
+                    Prompt::KeepOrReplace => {
+                        let c = s.incoming.take().expect("no pushed card");
+                        if k == 1 {
+                            Self::pay(s, p, Chips(100));
+                            s.muck.insert(c);
+                            s.queue.push_front(Slot::Up(p));
+                        } else {
+                            s.up[p.index()].push(c);
+                        }
+                    }
+                    Prompt::Take => {
+                        if k == 1 {
+                            let target = match self.script.steps[s.pc] {
+                                Step::TakeRounds { target, .. } => target as usize,
+                                _ => 5,
+                            };
+                            let last = s.own(p).len() + 1 >= target;
+                            s.queue
+                                .push_front(if last { Slot::Down(p) } else { Slot::Up(p) });
+                        }
+                    }
+                    Prompt::Pick => {
+                        let c = s.middle.remove(k as usize);
+                        s.up[p.index()].push(c);
+                    }
+                    Prompt::Buy => {
+                        if let Step::BuyCard { up, down } = self.script.steps[s.pc] {
+                            match k {
+                                1 => {
+                                    Self::pay(s, p, up);
+                                    s.queue.push_front(Slot::Up(p));
+                                }
+                                2 => {
+                                    Self::pay(s, p, down);
+                                    s.queue.push_front(Slot::Down(p));
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                Some(p)
+            }
+            Action::Bid(b) => {
+                let p = s.pending.pop_front().expect("no bidder");
+                s.bids[p.index()] = Some(b);
                 Some(p)
             }
             Action::Direction(d) => {
@@ -1308,6 +1711,7 @@ impl Game for Scripted {
                     Slot::BoardAt(b, pos) => Event::BoardAt(b, pos, c),
                     Slot::Pool => Event::PoolDeal,
                     Slot::PoolFlip(b) => Event::PoolFlip(b, c),
+                    Slot::Middle => Event::Middle(c),
                 },
                 (Some(p), Action::Declare(k)) => {
                     if p == seat {
@@ -1341,6 +1745,13 @@ impl Game for Scripted {
                     Event::Arranged(p)
                 }
                 (Some(_), Action::Direction(d)) => Event::Direction(d),
+                (Some(p), Action::Choose(k)) => Event::Chose(p, k),
+                (Some(p), Action::Bid(b)) => {
+                    if p == seat {
+                        own_choices.push(b);
+                    }
+                    Event::BidChosen(p)
+                }
                 (Some(p), Action::Pass(m)) => {
                     if p == seat {
                         own_choices.push(m);
@@ -1528,8 +1939,24 @@ impl Game for Scripted {
                     hand_slots[p.index()].push(id);
                     deals.push((DealRef::Slot(id), epoch));
                 }
-                Event::Up(_, c) | Event::Board(_, c) | Event::BoardAt(_, _, c) => {
-                    deals.push((DealRef::Known(c), epoch))
+                Event::Up(_, c)
+                | Event::Board(_, c)
+                | Event::BoardAt(_, _, c)
+                | Event::Middle(c) => deals.push((DealRef::Known(c), epoch)),
+                Event::Chose(..) | Event::BidShown(..) => {}
+                Event::BidChosen(p) => {
+                    let b = if p == me {
+                        *own.next().expect("own bid missing")
+                    } else {
+                        obs.history[ei..]
+                            .iter()
+                            .find_map(|x| match *x {
+                                Event::BidShown(q, b) if q == p => Some(b),
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| rng.random_range(0..=10))
+                    };
+                    choices.push(Action::Bid(b));
                 }
                 Event::PoolDeal => {
                     let id = slot_epoch.len();
@@ -1931,6 +2358,8 @@ impl Game for Scripted {
         let mut pass_round = 0;
         for e in &obs.history {
             match *e {
+                Event::Chose(_, k) => actions.push(Action::Choose(k)),
+                Event::Middle(_) | Event::BidShown(..) => {}
                 Event::HiddenDeal(_)
                 | Event::Up(..)
                 | Event::Board(..)
@@ -1963,6 +2392,7 @@ impl Game for Scripted {
                 | Event::Arranged(p)
                 | Event::Ordered(p)
                 | Event::Spat(p)
+                | Event::BidChosen(p)
                 | Event::InOutChosen(p) => {
                     if p == me {
                         own_decl.next();
@@ -2007,7 +2437,8 @@ impl Game for Scripted {
             Action::Draw(_) | Action::Arrange(_) | Action::Pass(_) | Action::Order(_) => {
                 ActionClass::CardChoice
             }
-            Action::Direction(_) | Action::InOut(_) => ActionClass::Declare,
+            Action::Direction(_) | Action::InOut(_) | Action::Bid(_) => ActionClass::Declare,
+            Action::Choose(_) => ActionClass::CardChoice,
         }
     }
 
@@ -2203,6 +2634,8 @@ impl Game for Scripted {
             Action::InOut(1) => "In".into(),
             Action::InOut(_) => "Out".into(),
             Action::Order(i) => format!("reveal order #{i}"),
+            Action::Bid(b) => format!("bid {}", Chips(50 * b as i64)),
+            Action::Choose(k) => format!("choose {k}"),
             Action::Arrange(k) => {
                 let p = PAIRINGS[k as usize].map(|i| i + 1);
                 format!(
@@ -2266,6 +2699,14 @@ pub enum Event {
     PoolDeal,
     /// Spit: a middle-pile card was turned face up onto a board.
     PoolFlip(u8, Card),
+    /// A public answer to a prompt.
+    Chose(Seat, u8),
+    /// Bid: a face-up card into the middle.
+    Middle(Card),
+    /// Bid: this seat placed its sealed bid.
+    BidChosen(Seat),
+    /// Bid: this seat's bid, revealed with everyone's.
+    BidShown(Seat, u8),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

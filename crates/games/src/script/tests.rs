@@ -511,11 +511,27 @@ fn shaped_value(id: &str, own: &[&str], board: &[(u8, &str)], k: usize) -> Optio
 fn elevator_hands_use_one_line() {
     // Spades at positions 0 (left top), 4 (right top), 3 (centre): no line holds all three, so no
     // flush even with two spades in hand.
-    let board = [(0, "As"), (4, "Ks"), (3, "Qs"), (1, "2d"), (2, "3c"), (5, "8h"), (6, "9c")];
+    let board = [
+        (0, "As"),
+        (4, "Ks"),
+        (3, "Qs"),
+        (1, "2d"),
+        (2, "3c"),
+        (5, "8h"),
+        (6, "9c"),
+    ];
     let v = shaped_value("elevator", &["Js", "Ts", "4d", "5h"], &board, 0).unwrap();
     assert_ne!(v.category(), engine::Category::Flush);
     // Put them in the middle row (1, 3, 5) and it is a royal flush.
-    let board = [(1, "As"), (3, "Ks"), (5, "Qs"), (0, "2d"), (2, "3c"), (4, "8h"), (6, "9c")];
+    let board = [
+        (1, "As"),
+        (3, "Ks"),
+        (5, "Qs"),
+        (0, "2d"),
+        (2, "3c"),
+        (4, "8h"),
+        (6, "9c"),
+    ];
     let v = shaped_value("elevator", &["Js", "Ts", "4d", "5h"], &board, 0).unwrap();
     assert_eq!(v.category(), engine::Category::RoyalFlush);
 }
@@ -525,13 +541,29 @@ fn wheel_of_death_needs_three_in_a_row() {
     // Trips need the pair in hand + one board 7: always possible. A straight needs 3 consecutive
     // ring cards: 8 at 0, 9 at 1, T at 2 with J Q in hand = straight.
     let board = [
-        (0, "8c"), (1, "9d"), (2, "Th"), (3, "2c"), (4, "3d"), (5, "4h"), (6, "5c"), (7, "Kd"), (8, "Ah"),
+        (0, "8c"),
+        (1, "9d"),
+        (2, "Th"),
+        (3, "2c"),
+        (4, "3d"),
+        (5, "4h"),
+        (6, "5c"),
+        (7, "Kd"),
+        (8, "Ah"),
     ];
     let v = shaped_value("wheel_of_death", &["Jc", "Qd", "2s", "3s"], &board, 0).unwrap();
     assert_eq!(v.category(), engine::Category::Straight);
     // Spread 8, 9, T around the ring (0, 3, 6): no three-in-a-row straight.
     let board = [
-        (0, "8c"), (3, "9d"), (6, "Th"), (1, "2c"), (4, "3d"), (7, "4h"), (2, "5c"), (5, "Kd"), (8, "Ah"),
+        (0, "8c"),
+        (3, "9d"),
+        (6, "Th"),
+        (1, "2c"),
+        (4, "3d"),
+        (7, "4h"),
+        (2, "5c"),
+        (5, "Kd"),
+        (8, "Ah"),
     ];
     let v = shaped_value("wheel_of_death", &["Jc", "Qd", "2s", "3s"], &board, 0).unwrap();
     assert_ne!(v.category(), engine::Category::Straight);
@@ -551,7 +583,9 @@ fn spit_middle_holds_nine_including_each_discard() {
     let g = game("spit");
     let setup = HandSetup::simple(3, Chips(10_000));
     let mut s = g.new_hand(&setup);
-    let deal = ["2c", "2d", "2h", "3c", "3d", "3h", "4c", "4d", "4h", "5c", "5d", "5h", "6c", "6d", "6h"];
+    let deal = [
+        "2c", "2d", "2h", "3c", "3d", "3h", "4c", "4d", "4h", "5c", "5d", "5h", "6c", "6d", "6h",
+    ];
     for c in deal {
         g.apply(&mut s, Action::Deal(card(c)));
     }
@@ -575,4 +609,83 @@ fn spit_middle_holds_nine_including_each_discard() {
     let mut legal = Vec::new();
     g.legal_actions(&s, &mut legal);
     assert_eq!(legal.len(), 9);
+}
+
+/// Deal the 2-down + check-around opening of a 2-seat stud game.
+fn stud_open(g: &Scripted, downs: [&str; 4]) -> State {
+    let setup = HandSetup::simple(2, Chips(10_000));
+    let mut s = g.new_hand(&setup);
+    for c in downs {
+        g.apply(&mut s, Action::Deal(card(c)));
+    }
+    g.apply(&mut s, Action::CheckCall);
+    g.apply(&mut s, Action::CheckCall);
+    s
+}
+
+#[test]
+fn baseball_face_up_four_earns_an_extra_card() {
+    let g = game("baseball");
+    let mut s = stud_open(&g, ["Ac", "Kc", "Ad", "Kd"]);
+    g.apply(&mut s, Action::Deal(card("4h"))); // s1's up card: a 4
+    g.apply(&mut s, Action::Deal(card("9s"))); // s0's up card
+    assert_eq!(g.to_act(&s), ToAct::Seat(Seat(1)), "s1 chooses up or down for the extra");
+    g.apply(&mut s, Action::Choose(1));
+    g.apply(&mut s, Action::Deal(card("2c")));
+    assert_eq!(s.up[1].as_slice(), &[card("4h"), card("2c")]);
+}
+
+#[test]
+fn low_in_the_hole_wild_is_the_lowest_hole_card() {
+    let g = game("low_in_the_hole");
+    let mut s = stud_open(&g, ["5c", "Ah", "Kd", "Ks"]);
+    // s1 holds 5c + Kd down: 5s are wild for s1 (ace high, so Ah is not its low card).
+    let wild = g.wild_for(&s, Seat(1));
+    assert!(wild.contains(card("5d")) && !wild.contains(card("Ah")));
+    // s0 holds Ah + Ks: kings wild.
+    assert!(g.wild_for(&s, Seat(0)).contains(card("Kh")));
+    let _ = &mut s;
+}
+
+#[test]
+fn push_moves_the_card_and_the_pusher_gets_a_fresh_one() {
+    let g = game("push");
+    let mut s = stud_open(&g, ["Ac", "Kc", "Ad", "Kd"]);
+    g.apply(&mut s, Action::Deal(card("2h"))); // s1's street card
+    g.apply(&mut s, Action::Choose(1)); // push it ($1)
+    g.apply(&mut s, Action::Deal(card("9s"))); // s1's fresh card
+    assert_eq!(g.to_act(&s), ToAct::Seat(Seat(0)), "s0 decides on the pushed 2h");
+    g.apply(&mut s, Action::Choose(0)); // keep it
+    assert_eq!(s.up[1].as_slice(), &[card("9s")]);
+    assert_eq!(s.up[0].as_slice(), &[card("2h")]);
+    assert_eq!(s.betting.contributed()[1], Chips(100), "push costs $1");
+}
+
+#[test]
+fn bullet_face_up_joker_kills() {
+    let g = game("bullet");
+    let mut s = stud_open(&g, ["Ac", "Kc", "Ad", "Kd"]);
+    // Take rounds: s1 takes and gets a face-up joker -> dead; s0 wins.
+    g.apply(&mut s, Action::Choose(1));
+    g.apply(&mut s, Action::Deal(Card::RED_JOKER));
+    assert!(s.betting.is_folded(Seat(1)));
+    assert_eq!(g.to_act(&s), ToAct::Terminal);
+}
+
+#[test]
+fn bid_highest_bid_picks_first() {
+    let g = game("bid");
+    let mut s = stud_open(&g, ["Ac", "Kc", "Ad", "Kd"]);
+    g.apply(&mut s, Action::Deal(card("2h")));
+    g.apply(&mut s, Action::Deal(card("Ah")));
+    // s1 bids $1, s0 bids $3 (hidden until both are in).
+    g.apply(&mut s, Action::Bid(2));
+    assert!(!g.observe(&s, Seat(0)).history.iter().any(|e| matches!(e, Event::BidShown(..))));
+    g.apply(&mut s, Action::Bid(6));
+    assert_eq!(g.to_act(&s), ToAct::Seat(Seat(0)), "s0 bid more and picks first");
+    g.apply(&mut s, Action::Choose(1)); // the Ah
+    g.apply(&mut s, Action::Choose(0));
+    assert_eq!(s.up[0].as_slice(), &[card("Ah")]);
+    assert_eq!(s.up[1].as_slice(), &[card("2h")]);
+    assert_eq!(s.betting.contributed()[0], Chips(200 + 300), "dealer ante + $3 bid");
 }
