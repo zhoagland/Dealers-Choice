@@ -209,7 +209,11 @@ impl HandSetup {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ActionClass {
     Fold,
-    CheckOrCall,
+    /// `owed` = what calling costs; zero means this is a check. Stats need the difference
+    /// (a check isn't "voluntarily putting money in"; a call is).
+    CheckOrCall {
+        owed: Chips,
+    },
     BetOrRaise {
         to: Chips,
     },
@@ -301,6 +305,12 @@ pub trait Game: Send + Sync + Sized + 'static {
     ) -> Self::State;
 
     fn classify(&self, s: &Self::State, a: Self::Action) -> ActionClass;
+
+    /// Cards only `seat` holds (hole cards, stud downcards). Used by player analytics for range
+    /// charts. Default: none (games where this doesn't apply).
+    fn private_cards(&self, _s: &Self::State, _seat: Seat) -> CardVec {
+        CardVec::new()
+    }
 
     /// Value unit for EV display and bot temperature: the big blind or the ante.
     fn eval_unit(&self) -> Chips;

@@ -14,6 +14,10 @@ use engine::Game;
 #[serde(try_from = "String", into = "String")]
 pub enum BotSpec {
     Random,
+    /// Always checks or calls (`bots::baseline`).
+    CallStation,
+    /// Always makes the biggest raise on the menu.
+    Maniac,
     Ismcts {
         level: u8,
         playouts: Option<u32>,
@@ -30,6 +34,8 @@ impl BotSpec {
     pub fn build<G: Game>(&self) -> Box<dyn Policy<G>> {
         match *self {
             BotSpec::Random => Box::new(RandomPolicy),
+            BotSpec::CallStation => Box::new(bots::baseline::CallingStation),
+            BotSpec::Maniac => Box::new(bots::baseline::Maniac),
             BotSpec::Blueprint { ref path } => {
                 Box::new(BlueprintPolicy::new(cached_blueprint::<G>(path)))
             }
@@ -73,6 +79,8 @@ impl std::str::FromStr for BotSpec {
         };
         match parts.as_slice() {
             ["random"] => Ok(BotSpec::Random),
+            ["callstation"] => Ok(BotSpec::CallStation),
+            ["maniac"] => Ok(BotSpec::Maniac),
             ["ismcts", l] => Ok(BotSpec::Ismcts {
                 level: num(l)?.clamp(1, 10) as u8,
                 playouts: None,
@@ -82,7 +90,7 @@ impl std::str::FromStr for BotSpec {
                 playouts: Some(num(p)?),
             }),
             _ => Err(format!(
-                "unknown bot {s:?}: use random, ismcts:<level>, or ismcts:<level>:<playouts>"
+                "unknown bot {s:?}: use random, callstation, maniac, ismcts:<level>[:<playouts>], or mccfr:<file>"
             )),
         }
     }
@@ -92,6 +100,8 @@ impl std::fmt::Display for BotSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             BotSpec::Random => write!(f, "random"),
+            BotSpec::CallStation => write!(f, "callstation"),
+            BotSpec::Maniac => write!(f, "maniac"),
             BotSpec::Blueprint { path } => write!(f, "mccfr:{path}"),
             BotSpec::Ismcts {
                 level,

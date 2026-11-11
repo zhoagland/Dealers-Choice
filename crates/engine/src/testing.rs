@@ -451,7 +451,7 @@ mod tests {
             match a {
                 Act::Deal(_) => ActionClass::Chance,
                 Act::Fold => ActionClass::Fold,
-                Act::Stay => ActionClass::CheckOrCall,
+                Act::Stay => ActionClass::CheckOrCall { owed: Chips::ZERO },
             }
         }
         fn eval_unit(&self) -> Chips {

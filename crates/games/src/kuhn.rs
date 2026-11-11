@@ -278,7 +278,8 @@ impl Game for Kuhn {
     fn classify(&self, _s: &State, a: Action) -> ActionClass {
         match a {
             Action::Deal(_) => ActionClass::Chance,
-            Action::Check | Action::Call => ActionClass::CheckOrCall,
+            Action::Check => ActionClass::CheckOrCall { owed: Chips::ZERO },
+            Action::Call => ActionClass::CheckOrCall { owed: Chips(1) },
             Action::Bet => ActionClass::BetOrRaise { to: Chips(2) },
             Action::Fold => ActionClass::Fold,
         }
@@ -286,6 +287,10 @@ impl Game for Kuhn {
 
     fn eval_unit(&self) -> Chips {
         Chips(1)
+    }
+
+    fn private_cards(&self, s: &State, seat: Seat) -> engine::CardVec {
+        s.cards.get(s.order_of(seat)).copied().into_iter().collect()
     }
 
     fn describe_observation(&self, obs: &Observation) -> String {

@@ -66,6 +66,17 @@ pub struct Note {
     pub flagged: bool,
 }
 
+/// A stored hand, as read back.
+#[derive(Clone, Debug)]
+pub struct HandRow {
+    pub id: i64,
+    pub game_id: String,
+    /// The player's seat in that hand.
+    pub seat: u8,
+    /// `sim::encoding` record.
+    pub record: Vec<u8>,
+}
+
 /// A human hand to store, with its coach review.
 pub struct StoredHand<'a> {
     pub session_id: i64,
@@ -226,6 +237,22 @@ impl Db {
         }
         tx.commit()?;
         Ok(id)
+    }
+
+    /// A player's stored hands, oldest first.
+    pub fn hands(&self, player_id: i64) -> DbResult<Vec<HandRow>> {
+        let mut st = self.conn.prepare(
+            "SELECT id, game_id, seat, record FROM hand WHERE player_id = ?1 ORDER BY id",
+        )?;
+        let rows = st.query_map([player_id], |r| {
+            Ok(HandRow {
+                id: r.get(0)?,
+                game_id: r.get(1)?,
+                seat: r.get(2)?,
+                record: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
     }
 
     /// Stored hand records for a player (optionally one game), oldest first.

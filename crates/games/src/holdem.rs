@@ -550,15 +550,24 @@ impl Game for Holdem {
         replay_interleaved(self, setup, deals, bets)
     }
 
-    fn classify(&self, _s: &State, a: Action) -> ActionClass {
+    fn classify(&self, s: &State, a: Action) -> ActionClass {
         match a {
             Action::Deal(_) => ActionClass::Chance,
             Action::Fold => ActionClass::Fold,
-            Action::CheckCall => ActionClass::CheckOrCall,
+            Action::CheckCall => {
+                let owed = match s.betting.to_act() {
+                    Some(seat) => s.betting.owed(seat).min(s.betting.stacks()[seat.index()]),
+                    None => Chips::ZERO,
+                };
+                ActionClass::CheckOrCall { owed }
+            }
             Action::RaiseTo(to) => ActionClass::BetOrRaise { to },
         }
     }
 
+    fn private_cards(&self, s: &State, seat: Seat) -> engine::CardVec {
+        s.hole[seat.index()].iter().copied().collect()
+    }
     fn eval_unit(&self) -> Chips {
         self.config.big_blind
     }

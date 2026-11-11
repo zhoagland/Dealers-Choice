@@ -28,7 +28,7 @@ impl Rollout {
             Rollout::CheckCallDown => {
                 if let Some(&a) = legal
                     .iter()
-                    .find(|&&a| game.classify(s, a) == ActionClass::CheckOrCall)
+                    .find(|&&a| matches!(game.classify(s, a), ActionClass::CheckOrCall { .. }))
                 {
                     return a;
                 }

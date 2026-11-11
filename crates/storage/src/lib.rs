@@ -8,6 +8,6 @@ pub mod db;
 pub mod files;
 pub mod profiles;
 
-pub use db::{Db, DbError, LedgerKind, Note, StoredHand};
+pub use db::{Db, DbError, HandRow, LedgerKind, Note, StoredHand};
 pub use files::{DataRoot, ZstdRecordSink};
 pub use profiles::{ProfileKind, ProfileStore};
