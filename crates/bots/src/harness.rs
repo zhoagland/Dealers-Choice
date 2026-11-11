@@ -29,9 +29,30 @@ pub fn play_hand<G: Game>(
     deal_rng: &mut DetRng,
     seat_rngs: &mut [DetRng],
 ) -> HandResult<G::Action> {
+    play_hand_with(
+        game,
+        setup,
+        &G::Carry::default(),
+        seats,
+        deal_rng,
+        seat_rngs,
+    )
+    .0
+}
+
+/// [`play_hand`] for any hand of a game, starting from `carry` (API v2). Also returns the
+/// terminal state, which `GameCarry::finish_hand` needs.
+pub fn play_hand_with<G: Game>(
+    game: &G,
+    setup: &HandSetup,
+    carry: &G::Carry,
+    seats: &mut [&mut dyn Policy<G>],
+    deal_rng: &mut DetRng,
+    seat_rngs: &mut [DetRng],
+) -> (HandResult<G::Action>, G::State) {
     assert_eq!(seats.len(), setup.num_seats as usize, "one policy per seat");
     assert_eq!(seat_rngs.len(), seats.len(), "one rng per seat");
-    let mut state = game.new_hand(setup);
+    let mut state = game.new_hand_with(setup, carry);
     let mut actions = Vec::new();
     let mut legal = Vec::new();
     let mut decisions = 0;
@@ -62,11 +83,14 @@ pub fn play_hand<G: Game>(
     for (policy, &p) in seats.iter_mut().zip(&payoffs) {
         policy.on_hand_end(p);
     }
-    HandResult {
-        actions,
-        payoffs,
-        decisions,
-    }
+    (
+        HandResult {
+            actions,
+            payoffs,
+            decisions,
+        },
+        state,
+    )
 }
 
 #[cfg(test)]

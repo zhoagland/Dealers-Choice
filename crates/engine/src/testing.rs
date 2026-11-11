@@ -10,9 +10,12 @@ use std::collections::HashSet;
 
 use rand::seq::IndexedRandom;
 
-use crate::game::{Chips, Game, HandSetup, Seat, ToAct, UniformSampler};
-use crate::replay::replay;
+use crate::carry::GameCarry;
+use crate::game::{Chips, Game, GameLength, HandSetup, Seat, ToAct, UniformSampler};
+use crate::replay::replay_with;
 use crate::rng::{Stream, derive_rng};
+
+pub mod guts_lite;
 
 /// Knobs for [`check_conformance`].
 #[derive(Clone, Debug)]
@@ -54,9 +57,14 @@ pub fn check_conformance<G: Game>(game: &G, cfg: &Conformance) {
         // varied[q][r]: while determinizing from seat q's view, did seat r's private view ever
         // change? If never, r's private info is probably leaking into q's observation (C4).
         let mut varied = vec![vec![false; n as usize]; n as usize];
+        let mut games = GameTracker::new(game, n);
         for hand in 0..cfg.hands {
-            play_one(game, cfg, n, hand, &mut varied);
+            let setup = games.next_setup(game, cfg, n, hand);
+            let carry_in = games.carry.carry().clone();
+            let (log, end) = play_one(game, cfg, &setup, &carry_in, hand, &mut varied);
+            games.finish_hand(game, &setup, &carry_in, &log, &end, hand);
         }
+        games.finish(game);
         for (q, row) in varied.iter().enumerate() {
             for (r, &did_vary) in row.iter().enumerate() {
                 assert!(
@@ -70,21 +78,170 @@ pub fn check_conformance<G: Game>(game: &G, cfg: &Conformance) {
     }
 }
 
-fn play_one<G: Game>(game: &G, cfg: &Conformance, n: u8, hand: usize, varied: &mut [Vec<bool>]) {
+/// Chains hands into games for `UntilDone` drivers (a no-op wrapper for other lengths), and
+/// checks the carry rules: conservation per hand and per game, dealt-out seats untouched, every
+/// hand replayable from its `carry_in`, and games that end with nothing left carried.
+struct GameTracker<G: Game> {
+    carry: GameCarry<G>,
+    /// `Some(max_hands)` for `UntilDone` games.
+    until_done: Option<u32>,
+    n: u8,
+    /// Net result per seat over the current game.
+    game_total: Vec<Chips>,
+    games_finished: usize,
+    games_over_normally: usize,
+}
+
+impl<G: Game> GameTracker<G> {
+    fn new(game: &G, n: u8) -> Self {
+        GameTracker {
+            carry: GameCarry::new(game),
+            until_done: match game.meta().length {
+                GameLength::UntilDone { max_hands } => Some(max_hands),
+                _ => None,
+            },
+            n,
+            game_total: vec![Chips::ZERO; n as usize],
+            games_finished: 0,
+            games_over_normally: 0,
+        }
+    }
+
+    fn all(&self) -> u16 {
+        (1u16 << self.n) - 1
+    }
+
+    fn next_setup(&mut self, game: &G, cfg: &Conformance, n: u8, hand: usize) -> HandSetup {
+        let all = self.all();
+        if let Some(max) = self.until_done {
+            let out = self.carry.seats_out(game) & all;
+            let live = n - out.count_ones() as u8;
+            if self.carry.is_over() || self.carry.hands() >= max || live < 2 {
+                self.close_game(game, all & !out);
+            }
+        }
+        let first = match self.until_done {
+            Some(_) => self.carry.hands() == 0,
+            None => hand.is_multiple_of(2),
+        };
+        let dealt_out = self.carry.seats_out(game) & all;
+        // The button moves each hand and skips dealt-out seats.
+        let button = (0..n as usize)
+            .map(|k| ((hand + k) % n as usize) as u8)
+            .find(|&s| dealt_out & (1 << s) == 0)
+            .unwrap();
+        HandSetup {
+            num_seats: n,
+            button: Seat(button),
+            chooser: Seat(button),
+            first_hand_of_game: first,
+            stacks: vec![cfg.stack; n as usize],
+            dealt_out,
+        }
+    }
+
+    fn finish_hand(
+        &mut self,
+        game: &G,
+        setup: &HandSetup,
+        carry_in: &G::Carry,
+        log: &[G::Action],
+        end: &G::State,
+        hand: usize,
+    ) {
+        let ctx = format!("[{} seats, hand {hand}]", self.n);
+        let payoffs = game.payoffs(end);
+        for s in setup.seats().filter(|&s| !setup.dealt_in(s)) {
+            assert_eq!(
+                payoffs[s.index()],
+                Chips::ZERO,
+                "C3 {ctx}: {s} was dealt out but has payoff {}",
+                payoffs[s.index()]
+            );
+        }
+        let carry_out = game.carry_out(end);
+        let sum: Chips = payoffs.iter().copied().sum();
+        assert_eq!(
+            sum,
+            game.carried_chips(carry_in) - game.carried_chips(&carry_out),
+            "C3 {ctx}: payoffs {payoffs:?} don't match the change in carried chips"
+        );
+        // C7 with carry: the hand replays from (setup, carry_in, log) to the same carry_out.
+        let replayed = replay_with(game, setup, carry_in, log)
+            .unwrap_or_else(|e| panic!("C7 {ctx}: replay from carry_in: {e}"));
+        assert_eq!(
+            game.carry_out(&replayed),
+            carry_out,
+            "C7 {ctx}: replay gives a different carry_out"
+        );
+        for (t, p) in self.game_total.iter_mut().zip(&payoffs) {
+            *t += *p;
+        }
+        let done = self.carry.finish_hand(game, end, &payoffs);
+        if self.until_done.is_none() || done.game_over {
+            if done.game_over {
+                self.games_over_normally += 1;
+            }
+            self.check_game_total(&ctx);
+        }
+    }
+
+    /// The game stopped without `game_over`: award what's still carried, then start a new game.
+    fn close_game(&mut self, game: &G, eligible: u16) {
+        if !self.carry.is_over() {
+            if let Some(pay) = self.carry.close(game, self.n, eligible, self.all()) {
+                for (t, p) in self.game_total.iter_mut().zip(&pay) {
+                    *t += *p;
+                }
+            }
+            self.check_game_total("[game stopped at the cap or with too few seats]");
+        }
+        self.carry = GameCarry::new(game);
+    }
+
+    fn check_game_total(&mut self, ctx: &str) {
+        let sum: Chips = self.game_total.iter().copied().sum();
+        assert_eq!(
+            sum,
+            Chips::ZERO,
+            "C3 {ctx}: a whole game's results {:?} don't sum to zero",
+            self.game_total
+        );
+        self.game_total.iter_mut().for_each(|t| *t = Chips::ZERO);
+        self.games_finished += 1;
+    }
+
+    fn finish(mut self, game: &G) {
+        if self.until_done.is_some() {
+            if self.carry.hands() > 0 {
+                let out = self.carry.seats_out(game);
+                self.close_game(game, self.all() & !out);
+            }
+            assert!(
+                self.games_over_normally > 0,
+                "C8 ({} seats): none of {} UntilDone games reached game_over; all hit the hand cap",
+                self.n,
+                self.games_finished
+            );
+        }
+    }
+}
+
+fn play_one<G: Game>(
+    game: &G,
+    cfg: &Conformance,
+    setup: &HandSetup,
+    carry: &G::Carry,
+    hand: usize,
+    varied: &mut [Vec<bool>],
+) -> (Vec<G::Action>, G::State) {
+    let n = setup.num_seats;
     let ctx = |step: usize| format!("[{n} seats, hand {hand}, step {step}]");
-    let setup = HandSetup {
-        num_seats: n,
-        button: Seat((hand % n as usize) as u8),
-        chooser: Seat((hand % n as usize) as u8),
-        first_hand_of_game: hand.is_multiple_of(2),
-        stacks: vec![cfg.stack; n as usize],
-        dealt_out: 0,
-    };
     let mut deal_rng = derive_rng(cfg.seed, hand as u64, Stream::Deal);
     let mut play_rng = derive_rng(cfg.seed, hand as u64, Stream::Seat(0));
     let mut det_rng = derive_rng(cfg.seed, hand as u64, Stream::Custom(0));
 
-    let mut state = game.new_hand(&setup);
+    let mut state = game.new_hand_with(setup, carry);
     let mut log = Vec::new();
     let mut legal = Vec::new();
     let mut outcomes = Vec::new();
@@ -126,6 +283,11 @@ fn play_one<G: Game>(game: &G, cfg: &Conformance, n: u8, hand: usize, varied: &m
                 a
             }
             ToAct::Seat(p) => {
+                assert!(
+                    setup.dealt_in(p),
+                    "C2 {}: {p} is dealt out but was asked to act",
+                    ctx(step)
+                );
                 game.legal_actions(&state, &mut legal);
                 assert!(
                     !legal.is_empty(),
@@ -165,19 +327,13 @@ fn play_one<G: Game>(game: &G, cfg: &Conformance, n: u8, hand: usize, varied: &m
         log.push(action);
     }
 
-    // C3: zero-sum, and nobody loses more than they brought.
+    // C3: zero-sum (net of carried chips; `GameTracker` checks that part), and nobody loses
+    // more than they brought.
     let payoffs = game.payoffs(&state);
     assert_eq!(
         payoffs.len(),
         n as usize,
         "C3 {}: payoffs length",
-        ctx(log.len())
-    );
-    let sum: Chips = payoffs.iter().copied().sum();
-    assert_eq!(
-        sum,
-        Chips::ZERO,
-        "C3 {}: payoffs {payoffs:?} don't sum to zero",
         ctx(log.len())
     );
     for (i, &p) in payoffs.iter().enumerate() {
@@ -189,8 +345,8 @@ fn play_one<G: Game>(game: &G, cfg: &Conformance, n: u8, hand: usize, varied: &m
     }
 
     // C7: replaying the log reproduces the hand exactly.
-    let replayed =
-        replay(game, &setup, &log).unwrap_or_else(|e| panic!("C7 {}: {e}", ctx(log.len())));
+    let replayed = replay_with(game, setup, carry, &log)
+        .unwrap_or_else(|e| panic!("C7 {}: {e}", ctx(log.len())));
     assert_eq!(
         game.to_act(&replayed),
         ToAct::Terminal,
@@ -211,6 +367,7 @@ fn play_one<G: Game>(game: &G, cfg: &Conformance, n: u8, hand: usize, varied: &m
             ctx(log.len())
         );
     }
+    (log, state)
 }
 
 /// C6 (round-trip) and the data for C4 (leaks), at one decision point.

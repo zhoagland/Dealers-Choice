@@ -16,15 +16,14 @@ use std::time::Duration;
 use rand::Rng;
 use rand::seq::IndexedRandom;
 
-use bots::coach::{DecisionReview, review_hand};
+use bots::coach::{DecisionReview, review_hand_with};
 use bots::ismcts::{Ismcts, IsmctsConfig};
-use bots::{Budget, IsmctsBot, Policy, play_hand};
-use engine::replay::replay;
+use bots::{Budget, IsmctsBot, Policy, play_hand_with};
 use engine::rng::{Stream, derive_rng, rng_from_seed};
 use engine::session::{SeatInfo, SeatKind, SessionEvent, Table};
-use engine::{Chips, Game, Seat, StakeModel};
+use engine::{Chips, Game, GameCarry, Seat, StakeModel};
 use games::registry::{GAME_IDS, GameVisitor, with_game};
-use sim::encoding::{HandRecord, encode};
+use sim::encoding::{HandRecord, encode, encode_carry};
 use storage::{DataRoot, Db, LedgerKind, Note, ProfileKind, ProfileStore, StoredHand};
 
 use crate::CliResult;
@@ -232,7 +231,9 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
             if hands == 1 { "" } else { "s" }
         );
 
-        while let Some((setup, map)) = table.next_hand() {
+        // Carried state between the hands of an `UntilDone` game (`()` for other games).
+        let mut carry = GameCarry::new(&game);
+        while let Some((setup, map)) = table.next_hand_excluding(carry.seats_out(&game)) {
             *self.hand_counter += 1;
             let hand = *self.hand_counter;
 
@@ -275,14 +276,20 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
             let mut rngs: Vec<_> = (0..map.len())
                 .map(|i| derive_rng(self.seed, hand, Stream::Seat(i as u8)))
                 .collect();
-            let result = play_hand(&game, &setup, &mut seats, &mut deal, &mut rngs);
+            let (result, end) = play_hand_with(
+                &game,
+                &setup,
+                carry.carry(),
+                &mut seats,
+                &mut deal,
+                &mut rngs,
+            );
 
             // Show the end of the hand from the human's seat.
             let human_seat = map
                 .iter()
                 .position(|&t| table.seats[t].kind == SeatKind::Human)
                 .map(|i| Seat(i as u8));
-            let end = replay(&game, &setup, &result.actions).map_err(|e| e.to_string())?;
             if let Some(h) = human_seat {
                 println!("\n{}", game.describe_observation(&game.observe(&end, h)));
             }
@@ -297,9 +304,10 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
             if let (Some(h), true) = (human_seat, self.settings.review) {
                 let mut search = Ismcts::<G>::new(IsmctsConfig::default());
                 let mut rng = rng_from_seed(self.seed ^ hand);
-                reviews = review_hand(
+                reviews = review_hand_with(
                     &game,
                     &setup,
+                    carry.carry(),
                     &result.actions,
                     h,
                     &mut search,
@@ -316,6 +324,7 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
                     0,
                     map.iter().map(|&t| t as u8).collect(),
                     setup.clone(),
+                    encode_carry(carry.carry()),
                     result.actions.clone(),
                 ));
                 let stored = StoredHand {
@@ -339,6 +348,9 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
                 p.db.store_hand(&stored).map_err(|e| e.to_string())?;
             }
             table.settle_hand(&map, &result.payoffs);
+            if carry.finish_hand(&game, &end, &result.payoffs).game_over {
+                table.finish_game_early();
+            }
 
             for t in table.busted() {
                 if table.seats[t].kind == SeatKind::Bot {
@@ -360,6 +372,21 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
             }
             if let Some(p) = self.persist.as_deref_mut() {
                 p.record(table, stake)?;
+            }
+        }
+        // An `UntilDone` game that hit its hand cap (or ran out of players) with a pot still
+        // carried: pay it out (D-G0-1).
+        if let Some(game_seats) = table.game_seats().map(<[usize]>::to_vec) {
+            let n = game_seats.len() as u8;
+            let eligible = table.game_eligible(carry.seats_out(&game));
+            if let Some(pay) = carry.close(&game, n, eligible, (1u16 << n) - 1) {
+                println!("  carried pot split:");
+                for (&t, p) in game_seats.iter().zip(&pay) {
+                    if *p != Chips::ZERO {
+                        println!("  {:<10} {:>+9}", table.seats[t].name, p.to_string());
+                    }
+                }
+                table.settle_carry(&game_seats, &pay);
             }
         }
         table.end_game();

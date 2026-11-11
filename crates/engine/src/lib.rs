@@ -6,6 +6,7 @@
 pub mod analysis;
 pub mod betting;
 pub mod card;
+pub mod carry;
 pub mod eval;
 pub mod game;
 pub mod pot;
@@ -19,6 +20,7 @@ pub mod view;
 // `engine::card::Card`.
 pub use analysis::{AnalysisLabels, DecisionContext, SizeBucket};
 pub use card::{Card, CardSet, Deck, Rank, Suit};
+pub use carry::{GameCarry, HandCarry};
 pub use eval::{Category, HandValue};
 pub use game::{
     API_VERSION, ActionClass, CardVec, Chips, Game, GameLength, GameMeta, HandSetup, HiddenSampler,

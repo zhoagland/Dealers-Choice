@@ -172,12 +172,18 @@ impl Table {
     /// Setup for the next hand, plus the map from hand seat → table index. `None` if the game is
     /// over or fewer than two players can play.
     pub fn next_hand(&self) -> Option<(HandSetup, Vec<usize>)> {
+        self.next_hand_excluding(0)
+    }
+
+    /// [`Table::next_hand`] for `UntilDone` games, also dealing out `game_out` (game seats the
+    /// game has removed: [`crate::Game::seats_out`]). Ignored for other game lengths.
+    pub fn next_hand_excluding(&self, game_out: u16) -> Option<(HandSetup, Vec<usize>)> {
         let g = self.current.as_ref()?;
         if g.hands_played >= g.hands_total {
             return None;
         }
         if let Some(fixed) = &g.fixed_seats {
-            return self.next_fixed_hand(g, fixed);
+            return self.next_fixed_hand(g, fixed, game_out);
         }
         let active = self.active();
         if active.len() < 2 {
@@ -212,13 +218,9 @@ impl Table {
         &self,
         g: &GameInProgress,
         fixed: &[usize],
+        game_out: u16,
     ) -> Option<(HandSetup, Vec<usize>)> {
-        let out = |i: usize| self.seats[i].sitting_out || self.seats[i].stack == Chips::ZERO;
-        let dealt_out = fixed
-            .iter()
-            .enumerate()
-            .filter(|&(_, &i)| out(i))
-            .fold(0u16, |m, (k, _)| m | 1 << k);
+        let dealt_out = self.fixed_seats_out(fixed) | game_out;
         if fixed.len() - (dealt_out.count_ones() as usize) < 2 {
             return None;
         }
@@ -238,6 +240,46 @@ impl Table {
             dealt_out,
         };
         Some((setup, fixed.to_vec()))
+    }
+
+    /// Game seats (bitmask over `fixed`) that are busted or sitting out.
+    fn fixed_seats_out(&self, fixed: &[usize]) -> u16 {
+        let out = |i: usize| self.seats[i].sitting_out || self.seats[i].stack == Chips::ZERO;
+        fixed
+            .iter()
+            .enumerate()
+            .filter(|&(_, &i)| out(i))
+            .fold(0u16, |m, (k, _)| m | 1 << k)
+    }
+
+    /// `UntilDone` only: the table indices in the game (game seat `k` = `game_seats()[k]`).
+    pub fn game_seats(&self) -> Option<&[usize]> {
+        self.current.as_ref()?.fixed_seats.as_deref()
+    }
+
+    /// `UntilDone` only: the game seats (bitmask) that started the game and haven't left it by
+    /// sitting out. Busted seats still count: they may rebuy. Excludes `game_out`.
+    pub fn game_eligible(&self, game_out: u16) -> u16 {
+        let Some(fixed) = self.game_seats() else {
+            return 0;
+        };
+        fixed
+            .iter()
+            .enumerate()
+            .filter(|&(_, &i)| !self.seats[i].sitting_out)
+            .fold(0u16, |m, (k, _)| m | 1 << k)
+            & !game_out
+    }
+
+    /// Pay out a carried pot left when an `UntilDone` game stops without finishing
+    /// ([`crate::Game::settle_carry`]). Not counted as a hand.
+    pub fn settle_carry(&mut self, map: &[usize], payoffs: &[Chips]) {
+        assert!(
+            payoffs.iter().all(|&p| p >= Chips::ZERO),
+            "a carried pot only pays out"
+        );
+        self.settle_hand(map, payoffs);
+        self.current.as_mut().unwrap().hands_played -= 1;
     }
 
     /// End an `UntilDone` game after the current hand (its `Game::game_over` returned true).

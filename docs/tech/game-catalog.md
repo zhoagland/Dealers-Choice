@@ -87,7 +87,13 @@ Engine work in G0, besides the trait:
 - `engine::testing` conformance: C4 (no leaks) learns about inverted information (the observer's *own*
   cards must vary across determinizations in Indian games; others' cards must not).
 - Session: drive `UntilDone`, persist carry between hands, and support the "if you're out you're out"
-  flag (a seat that folds is excluded from later hands of that game).
+  flag (a seat that folds is excluded from later hands of that game). **Done (2026-11-11):**
+  `engine::GameCarry` drives the hands of one game for the CLI, the sim runner and conformance; two
+  defaulted hooks were added: `Game::seats_out(carry)` (game-removed seats, dealt out by
+  `Table::next_hand_excluding`) and `Game::settle_carry(carry, eligible, n)` (pays a carried pot left at
+  the cap or with < 2 seats; default = D-G0-1 even split). Hand records carry `carry_in`. The sim treats
+  one `UntilDone` game as one deal. Toy `engine::testing::guts_lite` passes conformance with carry
+  replay (exit criterion).
 - Migrate Kuhn, Leduc, Hold'em and FTQ to v2 and bump their `meta.version` (records/blueprints invalidate
   per handbook §4). Add `view()` for each.
 

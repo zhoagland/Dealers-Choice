@@ -315,6 +315,27 @@ pub trait Game: Send + Sync + Sized + 'static {
         Chips::ZERO
     }
 
+    /// `UntilDone` games: seats the game itself has removed for the rest of the game (bitmask),
+    /// e.g. "if you're out you're out". The session deals them out of later hands, on top of
+    /// seats that are busted.
+    fn seats_out(&self, _carry: &Self::Carry) -> u16 {
+        0
+    }
+
+    /// Award chips still in `carry` when the game stops without `game_over`: the `max_hands` cap
+    /// was reached, or fewer than two seats can play. `eligible` is the bitmask of seats still in
+    /// the game (never empty). Must return `num_seats` payoffs summing to `carried_chips(carry)`,
+    /// zero outside `eligible`. Default (D-G0-1): split evenly, odd chips to the lowest seats.
+    fn settle_carry(&self, carry: &Self::Carry, eligible: u16, num_seats: u8) -> Vec<Chips> {
+        let mut out = vec![Chips::ZERO; num_seats as usize];
+        let amount = self.carried_chips(carry);
+        if amount != Chips::ZERO {
+            let order: Vec<Seat> = (0..num_seats).map(Seat).collect();
+            crate::pot::split(amount, eligible, &order, &mut out);
+        }
+        out
+    }
+
     fn to_act(&self, s: &Self::State) -> ToAct;
 
     /// Seat to act: the abstract action menu bots search over. Chance: every outcome.

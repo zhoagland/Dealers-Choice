@@ -21,10 +21,14 @@ pub struct HandRecord<A> {
     /// Which bot (index into the run's bot list) sat in each seat.
     pub seating: Vec<u8>,
     pub setup: HandSetup,
+    /// API v2: the game's carry at the start of this hand (`postcard` bytes of `Game::Carry`,
+    /// empty for games without one), so every hand of an `UntilDone` game replays on its own.
+    pub carry_in: Vec<u8>,
     pub actions: Vec<A>,
 }
 
 impl<A> HandRecord<A> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         game_id: &str,
         game_version: u32,
@@ -32,6 +36,7 @@ impl<A> HandRecord<A> {
         rotation: u8,
         seating: Vec<u8>,
         setup: HandSetup,
+        carry_in: Vec<u8>,
         actions: Vec<A>,
     ) -> Self {
         HandRecord {
@@ -42,9 +47,20 @@ impl<A> HandRecord<A> {
             rotation,
             seating,
             setup,
+            carry_in,
             actions,
         }
     }
+}
+
+/// Encode a carry for [`HandRecord::carry_in`].
+pub fn encode_carry<C: Serialize>(carry: &C) -> Vec<u8> {
+    postcard::to_allocvec(carry).expect("carries always serialize")
+}
+
+/// Decode [`HandRecord::carry_in`].
+pub fn decode_carry<C: DeserializeOwned>(bytes: &[u8]) -> Result<C, String> {
+    postcard::from_bytes(bytes).map_err(|e| e.to_string())
 }
 
 /// Encode with a length prefix.

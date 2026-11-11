@@ -37,7 +37,23 @@ pub fn review_hand<G: Game>(
     budget: Budget,
     rng: &mut DetRng,
 ) -> Vec<DecisionReview<G::Action>> {
-    let mut state = game.new_hand(setup);
+    let carry = G::Carry::default();
+    review_hand_with(game, setup, &carry, actions, seat, evaluator, budget, rng)
+}
+
+/// [`review_hand`] for a hand that started from `carry` (later hands of an `UntilDone` game).
+#[allow(clippy::too_many_arguments)]
+pub fn review_hand_with<G: Game>(
+    game: &G,
+    setup: &HandSetup,
+    carry: &G::Carry,
+    actions: &[G::Action],
+    seat: Seat,
+    evaluator: &mut dyn Evaluator<G>,
+    budget: Budget,
+    rng: &mut DetRng,
+) -> Vec<DecisionReview<G::Action>> {
+    let mut state = game.new_hand_with(setup, carry);
     let mut legal = Vec::new();
     let mut out = Vec::new();
     for (step, &a) in actions.iter().enumerate() {

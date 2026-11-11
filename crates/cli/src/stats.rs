@@ -11,7 +11,7 @@ use clap::Args;
 use engine::{Game, Seat};
 use games::registry::{GameVisitor, with_game};
 use sim::analytics::{PlayerStats, Ratio, Spot, add_hand, leak_report, range_grid};
-use sim::encoding::{HandRecord, decode_all};
+use sim::encoding::{HandRecord, decode_all, decode_carry};
 use storage::{DataRoot, Db, HandRow};
 
 use crate::CliResult;
@@ -102,7 +102,15 @@ impl GameVisitor<Result<PlayerStats, String>> for GameStats<'_> {
                 skipped += 1; // recorded under different rules: don't mix them in
                 continue;
             }
-            let spots = add_hand(&game, &rec.setup, &rec.actions, Seat(row.seat), &mut stats);
+            let carry: G::Carry = decode_carry(&rec.carry_in)?;
+            let spots = add_hand(
+                &game,
+                &rec.setup,
+                &carry,
+                &rec.actions,
+                Seat(row.seat),
+                &mut stats,
+            );
             spots_by_hand.insert(row.id, spots);
         }
 
