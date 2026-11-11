@@ -76,6 +76,18 @@ pub enum Step {
     Discard { n: u8, pairs: bool },
     /// Each seat still in secretly splits its six face-down cards into three pairs (Mama's).
     PairUp,
+    /// The chooser picks the passing direction (public; D-PT-1).
+    ChooseDirection,
+    /// Each seat still in picks `n` face-down cards; then all pass at once to the next seat in
+    /// the chosen direction.
+    Pass(u8),
+    /// Each seat still in secretly says In or Out; revealed together. Out folds; In pays `price`
+    /// into the pot (43: $1).
+    InOut { price: Chips },
+    /// Each seat still in secretly orders its face-down cards for revealing (Pass the Trash).
+    Order,
+    /// Each seat still in turns its next face-down card face up (in its chosen order).
+    Reveal,
     /// Red River (D-RR-1..3): one board card then a betting round, repeated while the card just
     /// dealt is red (and cards remain).
     RedRiver { board: u8 },
@@ -215,6 +227,51 @@ pub enum Action {
     Swap(u8),
     /// Mama's Favorite: split the six cards into pairs, by index into [`PAIRINGS`].
     Arrange(u8),
+    /// The chooser's passing direction: 0 = left (clockwise), 1 = right.
+    Direction(u8),
+    /// Bitmask of face-down cards to pass.
+    Pass(u8),
+    /// 1 = In, 0 = Out.
+    InOut(u8),
+    /// Reveal order, as an index into the permutations of the seat's face-down cards.
+    Order(u8),
+}
+
+/// The `idx`-th permutation (lexicographic) of `0..k`.
+pub fn permutation(k: usize, mut idx: usize) -> SmallVec<[u8; 8]> {
+    let mut items: SmallVec<[u8; 8]> = (0..k as u8).collect();
+    let mut out = SmallVec::new();
+    let mut f: usize = (1..k).product::<usize>().max(1);
+    for i in (1..=k).rev() {
+        let j = idx / f;
+        idx %= f;
+        out.push(items.remove(j));
+        if i > 1 {
+            f /= i - 1;
+        }
+    }
+    out
+}
+
+/// Inverse of [`permutation`].
+pub fn permutation_index(perm: &[u8]) -> usize {
+    let k = perm.len();
+    let mut items: SmallVec<[u8; 8]> = (0..k as u8).collect();
+    let mut idx = 0;
+    let mut f: usize = (1..k).product::<usize>().max(1);
+    for (i, &x) in perm.iter().enumerate() {
+        let j = items.iter().position(|&y| y == x).unwrap();
+        idx += j * f;
+        items.remove(j);
+        if k - i > 1 {
+            f /= k - i - 1;
+        }
+    }
+    idx
+}
+
+fn factorial(k: usize) -> usize {
+    (1..=k).product::<usize>().max(1)
 }
 
 /// The 15 ways to split six positions into three pairs; each is the new card order, so the
@@ -305,6 +362,19 @@ pub struct State {
     swapped: u16,
     /// (history index, Ace) for each draw that used the Ace bonus.
     ace_shows: Vec<(usize, Card)>,
+    /// Passing direction: 0 = left, 1 = right.
+    direction: u8,
+    /// Pass selections waiting to be made together.
+    pass_sel: Vec<Option<u8>>,
+    /// In/Out choices waiting to be revealed together (1 = in).
+    in_out: Vec<Option<u8>>,
+    /// Events the rules produce (passes resolving, in/out reveals, card reveals), each with the
+    /// history length when it happened.
+    sys_events: Vec<(usize, Event)>,
+    /// Cards each seat received by passing, in order.
+    received: Vec<SmallVec<[Card; 8]>>,
+    /// Everyone went Out: the hand is void and all chips go back.
+    void: bool,
     pub betting: Betting,
     queue: VecDeque<Slot>,
     deal_log: Vec<Slot>,
@@ -449,14 +519,91 @@ impl Scripted {
                 s.streets += 1;
                 s.swapped = 0;
             }
-            Step::Declare | Step::Draw { .. } | Step::Discard { .. } | Step::PairUp => {
+            Step::Declare
+            | Step::Draw { .. }
+            | Step::Discard { .. }
+            | Step::PairUp
+            | Step::Pass(_)
+            | Step::InOut { .. }
+            | Step::Order => {
                 s.pending = s.live_from_left().into();
+            }
+            Step::ChooseDirection => {
+                s.pending = std::iter::once(s.setup.chooser).collect();
+            }
+            Step::Reveal => {
+                for p in s.live_from_left() {
+                    if !s.down[p.index()].is_empty() {
+                        let c = s.down[p.index()].remove(0);
+                        s.up[p.index()].push(c);
+                        s.sys_events.push((s.history.len(), Event::Revealed(p, c)));
+                    }
+                }
             }
             Step::RedRiver { board } => {
                 s.red_betting = false;
                 s.queue.push_back(Slot::Board(board));
             }
         }
+    }
+
+    /// Everyone's pass selections are in: move the cards (all at once).
+    fn resolve_passes(&self, s: &mut State) {
+        let live: Vec<Seat> = s
+            .setup
+            .seats()
+            .filter(|&p| !s.betting.is_folded(p))
+            .collect();
+        let k = live.len();
+        let mut moving: Vec<(Seat, SmallVec<[Card; 8]>)> = Vec::new();
+        for (i, &q) in live.iter().enumerate() {
+            let m = s.pass_sel[q.index()].take().unwrap_or(0);
+            let to = if s.direction == 0 {
+                live[(i + 1) % k]
+            } else {
+                live[(i + k - 1) % k]
+            };
+            let hand = &mut s.down[q.index()];
+            let mut kept = SmallVec::new();
+            let mut gone = SmallVec::new();
+            for (j, &c) in hand.iter().enumerate() {
+                if m & (1 << j) != 0 {
+                    gone.push(c);
+                } else {
+                    kept.push(c);
+                }
+            }
+            *hand = kept;
+            moving.push((to, gone));
+        }
+        for (to, cards) in moving {
+            s.down[to.index()].extend(cards.iter().copied());
+            s.received[to.index()].extend(cards);
+        }
+        s.sys_events.push((s.history.len(), Event::PassesMade));
+    }
+
+    /// Everyone's In/Out is in: reveal it; Out folds, In pays the price.
+    fn resolve_in_out(&self, s: &mut State, price: Chips) {
+        let mut ins = 0u16;
+        for p in s.setup.seats() {
+            match s.in_out[p.index()].take() {
+                Some(1) => {
+                    ins |= 1 << p.0;
+                    if price > Chips::ZERO {
+                        let pay = price.min(s.betting.stacks()[p.index()]);
+                        s.betting.post_dead(p, pay);
+                    }
+                }
+                Some(_) => s.betting.fold_out(p),
+                None => {}
+            }
+        }
+        if ins == 0 {
+            s.void = true;
+        }
+        s.sys_events
+            .push((s.history.len(), Event::InOutResolved(ins)));
     }
 
     /// Move on until a seat must act, a card must be dealt, or the hand is over.
@@ -490,12 +637,34 @@ impl Scripted {
             let finished = match self.script.steps[s.pc] {
                 Step::Down(_) | Step::Up(_) | Step::Board { .. } => true,
                 Step::Bet => s.betting.to_act().is_none(),
-                Step::Declare | Step::Draw { .. } | Step::Discard { .. } | Step::PairUp => {
+                Step::Declare
+                | Step::Draw { .. }
+                | Step::Discard { .. }
+                | Step::PairUp
+                | Step::Pass(_)
+                | Step::InOut { .. }
+                | Step::Order
+                | Step::ChooseDirection => {
                     while s.pending.front().is_some_and(|&p| s.betting.is_folded(p)) {
                         s.pending.pop_front();
                     }
-                    s.pending.is_empty()
+                    let done = s.pending.is_empty();
+                    if done {
+                        match self.script.steps[s.pc] {
+                            Step::Pass(_) => self.resolve_passes(s),
+                            Step::InOut { price } => {
+                                self.resolve_in_out(s, price);
+                                if s.void {
+                                    s.done = true;
+                                    return;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    done
                 }
+                Step::Reveal => true,
                 Step::RedRiver { board } => {
                     if !s.red_betting {
                         let first = self.first_to_act(s);
@@ -594,6 +763,10 @@ impl Scripted {
     }
 
     fn winnings(&self, s: &State) -> Vec<Chips> {
+        if s.void {
+            // Everyone went Out: every chip goes back.
+            return s.betting.contributed().to_vec();
+        }
         let n = s.n() as usize;
         let folded = (0..n)
             .filter(|&i| s.betting.is_folded(Seat(i as u8)))
@@ -736,6 +909,12 @@ impl Game for Scripted {
             reshuffles: Vec::new(),
             swapped: 0,
             ace_shows: Vec::new(),
+            direction: 0,
+            pass_sel: vec![None; n],
+            in_out: vec![None; n],
+            sys_events: Vec::new(),
+            received: vec![SmallVec::new(); n],
+            void: false,
             betting,
             queue: VecDeque::new(),
             deal_log: Vec::new(),
@@ -756,10 +935,10 @@ impl Game for Scripted {
             return ToAct::Terminal;
         }
         match self.script.steps[s.pc] {
-            Step::Declare | Step::Draw { .. } | Step::Discard { .. } | Step::PairUp => {
-                ToAct::Seat(*s.pending.front().expect("step with nobody pending"))
+            Step::Bet | Step::RedRiver { .. } => {
+                ToAct::Seat(s.betting.to_act().expect("advance left a closed street"))
             }
-            _ => ToAct::Seat(s.betting.to_act().expect("advance left a closed street")),
+            _ => ToAct::Seat(*s.pending.front().expect("step with nobody pending")),
         }
     }
 
@@ -771,6 +950,20 @@ impl Game for Scripted {
             ToAct::Seat(p) => match self.script.steps[s.pc] {
                 Step::Declare => out.extend(DECLARE_OPTIONS.map(Action::Declare)),
                 Step::PairUp => out.extend((0..15).map(Action::Arrange)),
+                Step::ChooseDirection => out.extend([Action::Direction(0), Action::Direction(1)]),
+                Step::InOut { .. } => out.extend([Action::InOut(1), Action::InOut(0)]),
+                Step::Order => {
+                    let k = s.down[p.index()].len();
+                    out.extend((0..factorial(k)).map(|i| Action::Order(i as u8)));
+                }
+                Step::Pass(n) => {
+                    let k = s.down[p.index()].len() as u32;
+                    out.extend(
+                        (0u32..(1 << k))
+                            .filter(|m| m.count_ones() == n as u32)
+                            .map(|m| Action::Pass(m as u8)),
+                    );
+                }
                 Step::Draw { .. } | Step::Discard { .. } => {
                     let mut masks = Vec::new();
                     self.throw_masks(s, p, &mut masks);
@@ -803,6 +996,29 @@ impl Game for Scripted {
                         .join(", ")
                 ))),
                 (Step::PairUp, Action::Arrange(k)) if k < 15 => Ok(()),
+                (Step::ChooseDirection, Action::Direction(d)) if d < 2 => Ok(()),
+                (Step::ChooseDirection, _) => Err(IllegalAction(
+                    "choose the passing direction: left or right".into(),
+                )),
+                (Step::InOut { .. }, Action::InOut(x)) if x < 2 => Ok(()),
+                (Step::InOut { .. }, _) => Err(IllegalAction("say In or Out".into())),
+                (Step::Order, Action::Order(i))
+                    if (i as usize) < factorial(s.down[p.index()].len()) =>
+                {
+                    Ok(())
+                }
+                (Step::Order, _) => Err(IllegalAction(
+                    "choose the order to reveal your cards".into(),
+                )),
+                (Step::Pass(n), Action::Pass(m)) => {
+                    let k = s.down[p.index()].len();
+                    if (m as u32) >> k == 0 && m.count_ones() == n as u32 {
+                        Ok(())
+                    } else {
+                        Err(IllegalAction(format!("pass exactly {n} of your cards")))
+                    }
+                }
+                (Step::Pass(n), _) => Err(IllegalAction(format!("pass {n} cards"))),
                 (Step::PairUp, _) => Err(IllegalAction(
                     "split your six cards into three pairs".into(),
                 )),
@@ -823,7 +1039,7 @@ impl Game for Scripted {
                                 max,
                                 ace_bonus: true,
                             }) => format!(
-                                "throw away at most {max} card(s), or {} keeping (and showing)                                  an Ace",
+                                "throw away at most {max} card(s), or {} keeping (and showing) an Ace",
                                 max + 1
                             ),
                             Some(Step::Draw { max, .. }) => {
@@ -901,6 +1117,30 @@ impl Game for Scripted {
                 }
                 Some(p)
             }
+            Action::Direction(d) => {
+                let p = s.pending.pop_front().expect("no chooser");
+                s.direction = d;
+                Some(p)
+            }
+            Action::Pass(m) => {
+                let p = s.pending.pop_front().expect("no passer");
+                s.pass_sel[p.index()] = Some(m);
+                Some(p)
+            }
+            Action::InOut(x) => {
+                let p = s.pending.pop_front().expect("no one to say in/out");
+                s.in_out[p.index()] = Some(x);
+                Some(p)
+            }
+            Action::Order(i) => {
+                let p = s.pending.pop_front().expect("no one to order");
+                let hand = &mut s.down[p.index()];
+                let old = hand.clone();
+                for (j, &from) in permutation(old.len(), i as usize).iter().enumerate() {
+                    hand[j] = old[from as usize];
+                }
+                Some(p)
+            }
             Action::Swap(m) => {
                 let p = s.betting.to_act().expect("no seat to swap");
                 Self::throw(s, p, m);
@@ -951,7 +1191,11 @@ impl Game for Scripted {
         let mut history: SmallVec<[Event; 64]> = SmallVec::new();
         let mut reshuffles = s.reshuffles.iter().peekable();
         let mut aces = s.ace_shows.iter().peekable();
+        let mut sys = s.sys_events.iter().peekable();
         for (i, &(who, a)) in s.history.iter().enumerate() {
+            while let Some(&(_, e)) = sys.next_if(|&&(h, _)| h == i) {
+                history.push(e);
+            }
             while reshuffles.next_if(|&&r| r == i).is_some() {
                 history.push(Event::Reshuffle);
             }
@@ -991,9 +1235,31 @@ impl Game for Scripted {
                     }
                     Event::Arranged(p)
                 }
+                (Some(_), Action::Direction(d)) => Event::Direction(d),
+                (Some(p), Action::Pass(m)) => {
+                    if p == seat {
+                        own_choices.push(m);
+                    }
+                    Event::PassChosen(p)
+                }
+                (Some(p), Action::InOut(x)) => {
+                    if p == seat {
+                        own_choices.push(x);
+                    }
+                    Event::InOutChosen(p)
+                }
+                (Some(p), Action::Order(i)) => {
+                    if p == seat {
+                        own_choices.push(i);
+                    }
+                    Event::Ordered(p)
+                }
                 (Some(p), bet) => Event::Bet(p, bet.as_bet().unwrap()),
                 (None, _) => unreachable!("only chance has no actor"),
             };
+            history.push(e);
+        }
+        for &(_, e) in sys {
             history.push(e);
         }
         while reshuffles.next().is_some() {
@@ -1016,6 +1282,7 @@ impl Game for Scripted {
                 .collect(),
             own_shown: (self.script.visibility == Visibility::Indian && showdown)
                 .then(|| s.down[seat.index()].clone()),
+            own_received: s.received[seat.index()].clone(),
         }
     }
 
@@ -1033,23 +1300,124 @@ impl Game for Scripted {
         let me = obs.seat;
         let indian = self.script.visibility == Visibility::Indian;
 
+        let pass_sizes: Vec<u8> = self
+            .script
+            .steps
+            .iter()
+            .filter_map(|st| match *st {
+                Step::Pass(k) => Some(k),
+                _ => None,
+            })
+            .collect();
+        // Where each card this seat knows will be seen next: (event index, holder). From reveals,
+        // cards passed to us (the passer held them), and hands shown at the end. Choices made up
+        // for other seats below keep cards where they will be seen.
+        let mut seen: std::collections::HashMap<Card, Vec<(usize, Seat)>> =
+            std::collections::HashMap::new();
+        {
+            let all = (1u16 << n) - 1;
+            let (mut dir, mut out, mut round) = (0u8, 0u16, 0usize);
+            let mut recv = obs.own_received.iter();
+            for (i, e) in obs.history.iter().enumerate() {
+                match *e {
+                    Event::Bet(p, BetAction::Fold) => out |= 1 << p.0,
+                    Event::Direction(d) => dir = d,
+                    Event::InOutResolved(m) => out |= all & !m,
+                    Event::Drew(p, _, Some(c)) if c.is_joker() || c.rank() != Rank::Ace => {
+                        out |= 1 << p.0
+                    }
+                    Event::Revealed(p, c) => seen.entry(c).or_default().push((i, p)),
+                    Event::PassesMade => {
+                        let size = pass_sizes.get(round).copied().unwrap_or(0);
+                        round += 1;
+                        let live: Vec<Seat> = (0..n as u8)
+                            .map(Seat)
+                            .filter(|q| out & (1 << q.0) == 0)
+                            .collect();
+                        if let Some(at) = live.iter().position(|&q| q == me) {
+                            let k = live.len();
+                            let from = if dir == 0 {
+                                live[(at + k - 1) % k]
+                            } else {
+                                live[(at + 1) % k]
+                            };
+                            for _ in 0..size {
+                                if let Some(&c) = recv.next() {
+                                    seen.entry(c).or_default().push((i, from));
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            for (i, shown) in obs.shown.iter().enumerate() {
+                for &c in shown.iter().flatten() {
+                    seen.entry(c).or_default().push((usize::MAX, Seat(i as u8)));
+                }
+            }
+        }
+        let next_holder = |c: Card, at: usize| -> Option<Seat> {
+            seen.get(&c)?
+                .iter()
+                .filter(|&&(i, _)| i >= at)
+                .min_by_key(|&&(i, _)| i)
+                .map(|&(_, h)| h)
+        };
+        let in_out_revealed: Option<u16> = obs.history.iter().find_map(|e| match *e {
+            Event::InOutResolved(m) => Some(m),
+            _ => None,
+        });
+
         // 1. Walk the public events. Each hidden deal is a slot; each seat's hand is a list of
-        //    slots, following its draws/swaps/arrangements (others': the lowest positions and no
-        //    rearranging, arbitrary but consistent because their cards are sampled).
+        //    slots, following its draws, passes and rearrangements. Choices of other seats are
+        //    made up (their cards are sampled), keeping what this seat knows consistent.
         let mut hand_slots: Vec<Vec<usize>> = vec![Vec::new(); n];
         let mut slot_epoch: Vec<usize> = Vec::new();
+        let mut slot_card: Vec<Option<Card>> = Vec::new();
         let mut deals: Vec<(DealRef, usize)> = Vec::new();
         // Slots thrown away, with the epoch they were thrown in.
         let mut thrown: Vec<(usize, usize)> = Vec::new();
         let mut forced: Vec<(usize, Card)> = Vec::new();
         let mut choices: Vec<Action> = Vec::new();
+        let mut pass_masks: Vec<Vec<u8>> = Vec::new();
+        let mut own_pass: Option<u8> = None;
         let mut own = obs.own_choices.iter();
+        let mut own_cards = obs.own_dealt.iter();
+        let mut received = obs.own_received.iter();
+        let mut folded = 0u16;
+        let mut direction = 0u8;
         let mut epoch = 0;
-        for e in &obs.history {
+        // Which of `p`'s slots to give up first when inventing a choice at event `at` (lower first).
+        // Passing: cards that must reach someone else go first, cards `p` is seen with later stay.
+        // Throwing: cards never seen again go first; cards seen later must stay; unknown slots stay
+        // flexible.
+        let rank_slot =
+            |id: usize, p: Seat, at: usize, passing: bool, slot_card: &[Option<Card>]| -> u8 {
+                match (slot_card[id], passing) {
+                    (Some(c), true) => match next_holder(c, at) {
+                        Some(h) if h != p => 0,
+                        Some(_) => 3,
+                        None => 1,
+                    },
+                    (None, true) => 2,
+                    (Some(c), false) => match next_holder(c, at) {
+                        Some(_) => 3,
+                        None => 0,
+                    },
+                    (None, false) => 1,
+                }
+            };
+        for (ei, e) in obs.history.iter().enumerate() {
             match *e {
                 Event::HiddenDeal(p) => {
                     let id = slot_epoch.len();
                     slot_epoch.push(epoch);
+                    slot_card.push(if p == me && !indian {
+                        own_cards.next().copied()
+                    } else {
+                        None
+                    });
                     hand_slots[p.index()].push(id);
                     deals.push((DealRef::Slot(id), epoch));
                 }
@@ -1060,7 +1428,12 @@ impl Game for Scripted {
                         own.next();
                     }
                 }
-                Event::Bet(..) => {}
+                Event::Bet(p, b) => {
+                    if b == BetAction::Fold {
+                        folded |= 1 << p.0;
+                    }
+                }
+                Event::Direction(d) => direction = d,
                 Event::Arranged(p) => {
                     let k = if p == me {
                         *own.next().expect("own arrangement missing")
@@ -1074,15 +1447,161 @@ impl Game for Scripted {
                     }
                     choices.push(Action::Arrange(k));
                 }
+                Event::Ordered(p) => {
+                    let hs = hand_slots[p.index()].clone();
+                    let perm: SmallVec<[u8; 8]> = if p == me {
+                        let i = *own.next().expect("own order missing");
+                        permutation(hs.len(), i as usize)
+                    } else {
+                        // Put the slots holding p's later reveals first, in reveal order.
+                        let reveals: Vec<Card> = obs.history[ei..]
+                            .iter()
+                            .filter_map(|x| match *x {
+                                Event::Revealed(q, c) if q == p => Some(c),
+                                _ => None,
+                            })
+                            .collect();
+                        let mut used = vec![false; hs.len()];
+                        let mut perm = SmallVec::new();
+                        for c in &reveals {
+                            let pos = (0..hs.len())
+                                .find(|&j| !used[j] && slot_card[hs[j]] == Some(*c))
+                                .or_else(|| {
+                                    (0..hs.len()).find(|&j| !used[j] && slot_card[hs[j]].is_none())
+                                });
+                            if let Some(j) = pos {
+                                used[j] = true;
+                                perm.push(j as u8);
+                            }
+                        }
+                        perm.extend((0..hs.len()).filter(|&j| !used[j]).map(|j| j as u8));
+                        perm
+                    };
+                    let hsm = &mut hand_slots[p.index()];
+                    for (j, &from) in perm.iter().enumerate() {
+                        hsm[j] = hs[from as usize];
+                    }
+                    choices.push(Action::Order(permutation_index(&perm) as u8));
+                }
+                Event::Revealed(p, c) => {
+                    let hs = &mut hand_slots[p.index()];
+                    if !hs.is_empty() {
+                        let id = hs.remove(0);
+                        if slot_card[id].is_none() {
+                            slot_card[id] = Some(c);
+                        }
+                    }
+                }
+                Event::PassChosen(p) => {
+                    if p == me {
+                        own_pass = Some(*own.next().expect("own pass missing"));
+                    }
+                }
+                Event::PassesMade => {
+                    let size = pass_sizes.get(pass_masks.len()).copied().unwrap_or(0) as usize;
+                    let live: Vec<Seat> = (0..n as u8)
+                        .map(Seat)
+                        .filter(|q| folded & (1 << q.0) == 0)
+                        .collect();
+                    let k = live.len();
+                    let mut masks = vec![0u8; n];
+                    let mut moving: Vec<(Seat, Vec<usize>)> = Vec::new();
+                    for (i, &q) in live.iter().enumerate() {
+                        let to = if direction == 0 {
+                            live[(i + 1) % k]
+                        } else {
+                            live[(i + k - 1) % k]
+                        };
+                        let hs = hand_slots[q.index()].clone();
+                        let mask: u8 = if q == me {
+                            own_pass.take().unwrap_or(0)
+                        } else if to == me {
+                            // Pick slots so the cards arrive exactly as we received them.
+                            let chunk: Vec<Card> =
+                                (0..size).filter_map(|_| received.next().copied()).collect();
+                            let mut m = 0u8;
+                            let mut prev: i32 = -1;
+                            for (j, c) in chunk.iter().enumerate() {
+                                let known_at = |card: &Card| {
+                                    (0..hs.len()).find(|&x| slot_card[hs[x]] == Some(*card))
+                                };
+                                let pos = match known_at(c) {
+                                    Some(x) if x as i32 > prev => Some(x),
+                                    _ => {
+                                        let limit = chunk[j + 1..]
+                                            .iter()
+                                            .filter_map(known_at)
+                                            .min()
+                                            .unwrap_or(hs.len());
+                                        ((prev + 1) as usize..limit)
+                                            .find(|&x| {
+                                                m & (1 << x) == 0 && slot_card[hs[x]].is_none()
+                                            })
+                                            .or_else(|| {
+                                                (0..hs.len()).find(|&x| {
+                                                    m & (1 << x) == 0 && slot_card[hs[x]].is_none()
+                                                })
+                                            })
+                                    }
+                                };
+                                if let Some(x) = pos {
+                                    m |= 1 << x;
+                                    slot_card[hs[x]] = Some(*c);
+                                    prev = x as i32;
+                                }
+                            }
+                            m
+                        } else {
+                            let mut order: Vec<usize> = (0..hs.len()).collect();
+                            order.sort_by_key(|&x| (rank_slot(hs[x], q, ei, true, &slot_card), x));
+                            order.iter().take(size).fold(0u8, |m, &x| m | 1 << x)
+                        };
+                        masks[q.index()] = mask;
+                        let gone: Vec<usize> = (0..hs.len())
+                            .filter(|&x| mask & (1 << x) != 0)
+                            .map(|x| hs[x])
+                            .collect();
+                        hand_slots[q.index()].retain(|id| !gone.contains(id));
+                        moving.push((to, gone));
+                    }
+                    for (to, gone) in moving {
+                        hand_slots[to.index()].extend(gone);
+                    }
+                    pass_masks.push(masks);
+                }
+                Event::InOutChosen(p) => {
+                    let x = if p == me {
+                        *own.next().expect("own in/out missing")
+                    } else {
+                        match in_out_revealed {
+                            Some(m) => ((m >> p.0) & 1) as u8,
+                            None => rng.random_range(0..2),
+                        }
+                    };
+                    choices.push(Action::InOut(x));
+                }
+                Event::InOutResolved(m) => {
+                    folded |= !m & ((1u16 << n) - 1);
+                }
                 Event::Drew(p, k, _) | Event::Swapped(p, k) => {
+                    let hs = hand_slots[p.index()].clone();
                     let mask = if p == me {
                         *own.next().expect("own draw missing")
+                    } else if let Event::Drew(_, _, Some(c)) = *e {
+                        // A bonus draw keeps one card, the one shown.
+                        let keep = (0..hs.len())
+                            .find(|&x| slot_card[hs[x]] == Some(c))
+                            .or_else(|| (0..hs.len()).rev().find(|&x| slot_card[hs[x]].is_none()))
+                            .unwrap_or(hs.len() - 1);
+                        ((1u16 << hs.len()) - 1) as u8 & !(1 << keep)
                     } else {
-                        ((1u16 << k) - 1) as u8
+                        let mut order: Vec<usize> = (0..hs.len()).collect();
+                        order.sort_by_key(|&x| (rank_slot(hs[x], p, ei, false, &slot_card), x));
+                        order.iter().take(k as usize).fold(0u8, |m, &x| m | 1 << x)
                     };
-                    let hs = &mut hand_slots[p.index()];
+                    let hsm = &mut hand_slots[p.index()];
                     let mut i = 0;
-                    hs.retain(|&id| {
+                    hsm.retain(|&id| {
                         let keep = mask & (1 << i) == 0;
                         if !keep {
                             thrown.push((id, epoch));
@@ -1090,8 +1609,11 @@ impl Game for Scripted {
                         i += 1;
                         keep
                     });
-                    if let Event::Drew(_, _, Some(ace)) = *e {
-                        forced.push((hs[0], ace));
+                    if let Event::Drew(_, _, Some(c)) = *e {
+                        forced.push((hsm[0], c));
+                        if c.is_joker() || c.rank() != Rank::Ace {
+                            folded |= 1 << p.0; // fouled (D-3BM-1)
+                        }
                     }
                     choices.push(match *e {
                         Event::Drew(..) => Action::Draw(mask),
@@ -1101,14 +1623,9 @@ impl Game for Scripted {
             }
         }
 
-        // 2. Cards we know for slots: our own deals, shown hands (in hand order), shown Aces.
-        let mut slot_card: Vec<Option<Card>> = vec![None; slot_epoch.len()];
-        if !indian {
-            // Our own deals, in deal order.
-            for (id, &c) in slot_owner(&obs.history, me).into_iter().zip(&obs.own_dealt) {
-                slot_card[id] = Some(c);
-            }
-        } else if let Some(cards) = &obs.own_shown {
+        // 2. Cards we know for slots: shown hands (in hand order), shown Aces, and (Indian) our
+        //    own cards once shown. Our own deals and received cards were filled in above.
+        if indian && let Some(cards) = &obs.own_shown {
             for (&id, &c) in hand_slots[me.index()].iter().zip(cards) {
                 slot_card[id] = Some(c);
             }
@@ -1116,7 +1633,9 @@ impl Game for Scripted {
         for (i, shown) in obs.shown.iter().enumerate() {
             if let Some(cards) = shown {
                 for (&id, &c) in hand_slots[i].iter().zip(cards) {
-                    slot_card[id] = Some(c);
+                    if slot_card[id].is_none() {
+                        slot_card[id] = Some(c);
+                    }
                 }
             }
         }
@@ -1268,11 +1787,38 @@ impl Game for Scripted {
         let mut own_decl = obs.own_choices.iter();
         let mut deal_actions = Vec::new();
         let mut actions = Vec::new();
+        let mut pass_round = 0;
         for e in &obs.history {
             match *e {
-                Event::HiddenDeal(_) | Event::Up(..) | Event::Board(..) | Event::Reshuffle => {}
+                Event::HiddenDeal(_)
+                | Event::Up(..)
+                | Event::Board(..)
+                | Event::Reshuffle
+                | Event::InOutResolved(_)
+                | Event::Revealed(..) => {}
+                Event::PassesMade => pass_round += 1,
                 Event::Bet(_, b) => actions.push(Action::from_bet(b)),
-                Event::Drew(p, ..) | Event::Swapped(p, _) | Event::Arranged(p) => {
+                Event::Direction(d) => actions.push(Action::Direction(d)),
+                Event::PassChosen(p) => {
+                    if p == me {
+                        own_decl.next();
+                    }
+                    let m = match pass_masks.get(pass_round) {
+                        Some(ms) => ms[p.index()],
+                        // A round still being chosen: nothing has moved yet.
+                        None if p == me => own_pass.expect("own pass missing"),
+                        None => {
+                            let size = pass_sizes.get(pass_round).copied().unwrap_or(0);
+                            ((1u16 << size) - 1) as u8
+                        }
+                    };
+                    actions.push(Action::Pass(m));
+                }
+                Event::Drew(p, ..)
+                | Event::Swapped(p, _)
+                | Event::Arranged(p)
+                | Event::Ordered(p)
+                | Event::InOutChosen(p) => {
                     if p == me {
                         own_decl.next();
                     }
@@ -1313,7 +1859,10 @@ impl Game for Scripted {
             }
             Action::RaiseTo(to) => ActionClass::BetOrRaise { to },
             Action::Declare(_) => ActionClass::Declare,
-            Action::Draw(_) | Action::Arrange(_) => ActionClass::CardChoice,
+            Action::Draw(_) | Action::Arrange(_) | Action::Pass(_) | Action::Order(_) => {
+                ActionClass::CardChoice
+            }
+            Action::Direction(_) | Action::InOut(_) => ActionClass::Declare,
         }
     }
 
@@ -1493,6 +2042,12 @@ impl Game for Scripted {
             Action::Draw(0) => "stand pat".into(),
             Action::Draw(m) => format!("throw away cards {}", mask_positions(m)),
             Action::Swap(m) => format!("swap cards {} and call", mask_positions(m)),
+            Action::Direction(0) => "pass to the left".into(),
+            Action::Direction(_) => "pass to the right".into(),
+            Action::Pass(m) => format!("pass cards {}", mask_positions(m)),
+            Action::InOut(1) => "In".into(),
+            Action::InOut(_) => "Out".into(),
+            Action::Order(i) => format!("reveal order #{i}"),
             Action::Arrange(k) => {
                 let p = PAIRINGS[k as usize].map(|i| i + 1);
                 format!(
@@ -1503,21 +2058,6 @@ impl Game for Scripted {
             a => format!("{a:?}"),
         }
     }
-}
-
-/// Slot ids (in deal order) of every hidden deal to `seat`.
-fn slot_owner(history: &[Event], seat: Seat) -> Vec<usize> {
-    let mut out = Vec::new();
-    let mut id = 0;
-    for e in history {
-        if let Event::HiddenDeal(p) = *e {
-            if p == seat {
-                out.push(id);
-            }
-            id += 1;
-        }
-    }
-    out
 }
 
 fn mask_positions(m: u8) -> String {
@@ -1549,6 +2089,20 @@ pub enum Event {
     Arranged(Seat),
     /// The stock ran out; the discards were shuffled into a new stock (D-DRAW-1).
     Reshuffle,
+    /// The chooser picked the passing direction (0 = left).
+    Direction(u8),
+    /// This seat picked its cards to pass.
+    PassChosen(Seat),
+    /// Everyone passed at once.
+    PassesMade,
+    /// This seat said In or Out (hidden until all have).
+    InOutChosen(Seat),
+    /// Everyone's In/Out, revealed together (bitmask of In seats).
+    InOutResolved(u16),
+    /// This seat ordered its cards for revealing.
+    Ordered(Seat),
+    /// This seat turned this card face up.
+    Revealed(Seat, Card),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1566,6 +2120,8 @@ pub struct Observation {
     pub shown: Vec<Option<SmallVec<[Card; 8]>>>,
     /// Indian games: this seat's own cards, revealed at showdown.
     pub own_shown: Option<SmallVec<[Card; 8]>>,
+    /// Cards passed to this seat, in order.
+    pub own_received: SmallVec<[Card; 8]>,
 }
 
 #[cfg(test)]

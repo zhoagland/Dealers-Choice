@@ -400,3 +400,91 @@ fn swap_instead_of_fold() {
         "called"
     );
 }
+
+#[test]
+fn pass_and_in_out_games_hold_up_over_many_hands() {
+    for id in ["pass_the_trash", "man_or_mouse", "game_43"] {
+        check_conformance(
+            &game(id),
+            &Conformance {
+                hands: 120,
+                seat_counts: vec![2, 4, 7],
+                determinizations: 2,
+                seed: 0xBEEF,
+                ..Conformance::default()
+            },
+        );
+    }
+}
+
+#[test]
+fn passes_go_to_the_next_seat_in_the_chosen_direction() {
+    let g = game("pass_the_trash");
+    let setup = HandSetup::simple(3, Chips(10_000));
+    let mut s = g.new_hand(&setup);
+    g.apply(&mut s, Action::Direction(0)); // left
+    // 7 rounds, dealing s1, s2, s0: s1 gets clubs, s2 diamonds, s0 hearts.
+    let ranks = ["2", "3", "4", "5", "6", "7", "8"];
+    for r in ranks {
+        for suit in ["c", "d", "h"] {
+            g.apply(&mut s, Action::Deal(card(&format!("{r}{suit}"))));
+        }
+    }
+    for _ in 0..3 {
+        g.apply(&mut s, Action::CheckCall);
+    }
+    // Everyone passes their first three cards.
+    for _ in 0..3 {
+        g.apply(&mut s, Action::Pass(0b111));
+    }
+    // Left = to the next seat clockwise: s0 -> s1, s1 -> s2, s2 -> s0.
+    assert!(s.down[1].contains(&card("2h")), "s1 got s0's cards");
+    assert!(s.down[2].contains(&card("2c")), "s2 got s1's cards");
+    assert!(s.down[0].contains(&card("2d")), "s0 got s2's cards");
+    let obs = g.observe(&s, Seat(0));
+    assert_eq!(
+        obs.own_received.as_slice(),
+        &[card("2d"), card("3d"), card("4d")]
+    );
+}
+
+#[test]
+fn in_pays_a_dollar_in_43_and_all_out_is_void() {
+    let g = game("game_43");
+    let setup = HandSetup::simple(3, Chips(10_000));
+    let mut s = g.new_hand(&setup);
+    for c in [
+        "2c", "2d", "2h", "3c", "3d", "3h", "4c", "4d", "4h", "5c", "5d", "5h",
+    ] {
+        g.apply(&mut s, Action::Deal(card(c)));
+    }
+    // In/out in turn from the dealer's left: s1 In, s2 Out, s0 In.
+    g.apply(&mut s, Action::InOut(1));
+    g.apply(&mut s, Action::InOut(0));
+    let obs = g.observe(&s, Seat(0));
+    assert!(
+        !obs.history
+            .iter()
+            .any(|e| matches!(e, Event::InOutResolved(_))),
+        "hidden until all"
+    );
+    g.apply(&mut s, Action::InOut(1));
+    assert!(s.betting.is_folded(Seat(2)));
+    assert_eq!(s.betting.contributed()[1], Chips(100));
+    assert_eq!(s.betting.contributed()[0], Chips(300), "dealer ante + $1");
+
+    let mut v = g.new_hand(&setup);
+    for c in [
+        "2c", "2d", "2h", "3c", "3d", "3h", "4c", "4d", "4h", "5c", "5d", "5h",
+    ] {
+        g.apply(&mut v, Action::Deal(card(c)));
+    }
+    for _ in 0..3 {
+        g.apply(&mut v, Action::InOut(0));
+    }
+    assert_eq!(g.to_act(&v), ToAct::Terminal);
+    assert!(
+        g.payoffs(&v).iter().all(|&x| x == Chips::ZERO),
+        "everyone Out: all chips back"
+    );
+}

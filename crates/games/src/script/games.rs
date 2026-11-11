@@ -48,6 +48,10 @@ pub const SCRIPTED_IDS: &[&str] = &[
     "mamas_favorite",
     "holdem_swap",
     "fusion",
+    // G5 Pass & in/out
+    "pass_the_trash",
+    "man_or_mouse",
+    "game_43",
 ];
 
 /// The script for `id`.
@@ -136,6 +140,9 @@ pub fn script(id: &str) -> Option<Script> {
         "mamas_favorite" => mamas_favorite(),
         "holdem_swap" => swap_holdem(),
         "fusion" => fusion(),
+        "pass_the_trash" => pass_the_trash(),
+        "man_or_mouse" => man_or_mouse(),
+        "game_43" => game_43(),
         _ => return None,
     })
 }
@@ -704,5 +711,118 @@ fn fusion() -> Script {
             },
         }],
         ..base("fusion", "Fusion", "Poker Bible §Fusion")
+    }
+}
+
+// ----- G5 Pass & in/out -----------------------------------------------------------------------
+
+const HIGH_OWN: ShareRule = ShareRule {
+    name: "High",
+    ranking: Ranking::High,
+    build: Build::Own,
+    board: 0,
+};
+const LOW_OWN: ShareRule = ShareRule {
+    name: "Low",
+    ranking: Ranking::LowA6,
+    build: Build::Own,
+    board: 0,
+};
+
+/// Pass the Trash: 7 cards; pass 3, bet, pass 2, bet, pass 1 in the chooser's direction; throw away
+/// 2; order the 5 face down and roll them one at a time with a betting round after each of the
+/// first 4 (best hand showing opens); declare; show down. Max 7 seats.
+/// - **D-PT-1** the chooser picks the direction (left/right) as a public action at the start.
+/// - **D-PT-2** "Declare (High/Low)" is the standard declaration including Both.
+/// - **D-PT-3** passes are chosen in turn but made all at once; the reveal order is a hidden
+///   choice made before the first card is turned.
+fn pass_the_trash() -> Script {
+    Script {
+        steps: vec![
+            ChooseDirection,
+            Down(7),
+            Bet,
+            Pass(3),
+            Bet,
+            Pass(2),
+            Bet,
+            Pass(1),
+            Discard { n: 2, pairs: false },
+            Order,
+            Reveal,
+            Bet,
+            Reveal,
+            Bet,
+            Reveal,
+            Bet,
+            Reveal,
+            Bet,
+            Declare,
+        ],
+        max_seats: 7,
+        order: ActOrder::BestBoard,
+        shares: vec![HIGH_OWN, LOW_OWN],
+        declare: Some(DeclareKind::HiLo),
+        boards: 0,
+        ..base(
+            "pass_the_trash",
+            "Pass the Trash",
+            "Poker Bible §Pass the Trash",
+        )
+    }
+}
+
+/// Man or Mouse: 7 cards and one face-down community card; bet; pass 2 in the chooser's direction;
+/// In/Out; bet; flip the community card; bet; declare. Hands: best 5 of the 7 + the community card.
+/// - **D-MM-1** In/Out is simultaneous (revealed together); Out is a fold. If everyone is Out the
+///   hand is void and every chip goes back.
+/// - Direction as D-PT-1. Variation `five_card_start` (the Bible's): 5 cards, In/Out, bet, 2 more
+///   cards, bet, community card, bet, declare (no passing).
+fn man_or_mouse() -> Script {
+    Script {
+        steps: vec![
+            ChooseDirection,
+            Down(7),
+            Bet,
+            Pass(2),
+            InOut { price: Chips::ZERO },
+            Bet,
+            Board { board: 0, n: 1 },
+            Bet,
+            Declare,
+        ],
+        max_seats: 7,
+        shares: vec![HIGH_ANY, LOW_ANY],
+        declare: Some(DeclareKind::HiLo),
+        variants: vec![Variant {
+            name: "five_card_start",
+            apply: |s| {
+                s.steps = vec![
+                    Down(5),
+                    InOut { price: Chips::ZERO },
+                    Bet,
+                    Down(2),
+                    Bet,
+                    Board { board: 0, n: 1 },
+                    Bet,
+                    Declare,
+                ];
+            },
+        }],
+        ..base("man_or_mouse", "Man or Mouse", "Poker Bible §Man or Mouse")
+    }
+}
+
+/// 43: 4 cards; In/Out with a $1 chip (In puts it in the pot); 3 more cards; bet; declare.
+/// Best 5 of 7, hi/lo. **D-43-1** In/Out is simultaneous and In posts $1. If everyone is Out the
+/// hand is void. Max 7 seats.
+fn game_43() -> Script {
+    Script {
+        steps: vec![Down(4), InOut { price: Chips(100) }, Down(3), Bet, Declare],
+        max_seats: 7,
+        shares: vec![HIGH_OWN, LOW_OWN],
+        declare: Some(DeclareKind::HiLo),
+        boards: 0,
+        ..base("game_43", "43", "Poker Bible §43")
     }
 }

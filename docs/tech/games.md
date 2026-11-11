@@ -189,6 +189,9 @@ showdown, burns not modelled. **D-HE-1** Hold'em variants play best five of hole
 | `mamas_favorite` | Mama's Favorite | 6 down in 3 secret pairs, throw a pair after flop and turn | high | D-MF-1 |
 | `holdem_swap` | Swap Hold'em | swap 1-2 cards instead of folding | high | D-SW-1 (owner) |
 | `fusion` | Fusion | Hold'em + a hole card after flop and turn | high | D-FU-1, `hi_lo` |
+| `pass_the_trash` | Pass the Trash | 7 down; pass 3/2/1 in the chooser's direction; throw 2; ordered reveals | hi/lo declare | D-PT-1/2/3 |
+| `man_or_mouse` | Man or Mouse | 7 down + 1 community; pass 2; In/Out | hi/lo declare | D-MM-1, `five_card_start` |
+| `game_43` | 43 | 4 down; In/Out for $1; 3 more | hi/lo declare | D-43-1 |
 
 ## Open questions
 - ~~G-1~~ Resolved: FTQ max 7 seats.
