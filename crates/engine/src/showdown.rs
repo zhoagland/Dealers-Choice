@@ -27,7 +27,7 @@ pub fn may_show<G: Game>(game: &G, end: &G::State) -> Vec<Seat> {
             let view = game.view(&game.observe(end, q));
             view.seats.iter().find(|s| s.seat == p).is_some_and(|s| {
                 matches!(s.status, SeatStatus::Active | SeatStatus::AllIn)
-                    && s.cards.iter().any(|c| *c == CardSlot::Down(None))
+                    && s.cards.contains(&CardSlot::Down(None))
             })
         })
         .filter(|&p| !own_hidden_cards(game, end, p).is_empty())
