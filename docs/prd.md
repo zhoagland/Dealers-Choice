@@ -2,8 +2,8 @@
 
 | Field   | Value                         |
 |---------|-------------------------------|
-| Status  | Approved v0.1 (2026-10-10)    |
-| Date    | 2026-10-10                    |
+| Status  | v0.1 approved (2026-10-10), M0–M8 implemented, see `ChangeLog.md`. **v0.2 (Phase 2: §2.1, §5.9–5.11, §9.1) is a draft for owner review** |
+| Date    | 2026-10-10 (v0.1), 2026-11-10 (v0.2 draft) |
 | Owner   | Zachary Hoagland              |
 | Rules source of truth | `Rules/Poker Bible.typ` |
 
@@ -41,6 +41,18 @@ simulator are game-agnostic and only interact with games through that API.
 - Real money, rake.
 - Solving full-scale multiway games to equilibrium (no algorithm guarantees this; see §8).
 - Implementing all ~50 Bible games. v1 ships 3; the API must *admit* the rest.
+
+### 2.1 Phase 2 goals (v0.2 draft)
+Three tracks that run in parallel after the v1 stack is merged (M9):
+- **S: Simulation program.** Answer four questions with background campaigns on the dev PC and HTML
+  reports: game balance per Bible game, a bot strength ladder, strategy studies for the owner, and solver
+  blueprints. Plan: `docs/tech/sim-program.md`.
+- **G: Full catalog.** Implement the remaining 48 Bible games, poker and non-poker, by mechanic family,
+  one PR per family. Where the Bible is ambiguous: decide, log, and flag for the owner. Plan: `docs/tech/game-catalog.md`.
+- **W: Web multiplayer.** Friends play Dealer's Choice over the internet: Discord login, humans only, chat and
+  hand history, mobile-friendly, self-hosted on the owner's server. Plan: `docs/tech/web.md`.
+
+Phase 2 non-goals: bots at web tables, coach in the web UI, spectators, real money, cloud compute for sims.
 
 ## 3. Users and modes
 
@@ -172,8 +184,8 @@ House conventions that are engine-level, not per-game:
 - **FR-EV-1** `evaluate(observation, budget) → [(action, Q, standard_error)]`, sorted by Q.
 - **FR-EV-2** **Spot analysis:** the user specifies a game, the visible state, the action history, the hero's
   cards, and a range for each opponent. Hold'em ranges use standard notation (`TT+, AKs, KQo`, weights
-  allowed). Stud/FTQ ranges in v1 are "uniform over unseen cards" with optional card-level
-  weights (see OQ-5). Output as in FR-EV-1.
+  allowed). Stud/FTQ ranges in v1 are "uniform over unseen cards"; Phase 2 adds hand-category
+  weights (OQ-5). Output as in FR-EV-1.
 - **FR-EV-3** **Coach, post-hand (default on):** after each hand, list every human decision with
   `EV_loss = Q(best) − Q(chosen) ± SE`. A decision is flagged only when `EV_loss > 2·SE`, so
   search noise isn't reported as a mistake.
@@ -188,6 +200,24 @@ House conventions that are engine-level, not per-game:
 - **FR-SM-3** Instrumentation: hands/s, decisions/s, encoded bytes/hand, per (game, bot config).
 - **FR-SM-4** Output tiers: aggregates (always), full hand histories (opt-in or sampled at rate *p*).
 
+### 5.6b Player analytics (M7)
+- Scope: **human players only.** Bot hands are never post-processed or stored for analytics, which keeps
+  storage small. Bot baselines in FR-PA-3 are computed on the fly when a report is built, not stored.
+- **FR-PA-1** Descriptive stats per player, game, and position, computed from stored hand
+  records: VPIP, PFR, 3-bet %, aggression factor, c-bet %, fold to c-bet, WTSD, W$SD. Defined via
+  `ActionClass` so they apply to any game. Each stat is shown with its sample size and a 95% CI.
+- **FR-PA-2** True range charts: because hand records are replayable from their seeds, the
+  player's hole cards are known for **every** hand, including folds. Show the actual range per
+  preflop/opening spot.
+- **FR-PA-3** EV leak report: aggregate coach `EV_loss ± SE` by spot (street × position × action
+  class × hand-strength bucket), rank by total EV lost, and compare frequencies with the default bot's in
+  the same spots. Only spots where the loss exceeds 2·SE are reported.
+- **FR-PA-4** Cross-game style summary (aggression, fold to pressure), labeled as indicative only:
+  stats don't transfer cleanly between games with different structures.
+- **FR-PA-5** *(post-v1)* Exploitative bots: weight determinization of a player's hidden cards by
+  their observed tendencies (opponent model), with capped deviation from the default strategy
+  so the bot stays hard to counter-exploit.
+
 ### 5.7 Storage (`storage` crate)
 - **FR-ST-1** App state (profiles, bankrolls, bot presets, saved sessions) in SQLite.
 - **FR-ST-2** Simulation output partitioned by game and run at `data/sim/game=<id>/run=<uuid>/`,
@@ -199,8 +229,55 @@ House conventions that are engine-level, not per-game:
 
 ### 5.8 Interfaces
 - **FR-UI-1** v1: CLI (`cli` crate, `clap`) for play, spot, sim, train.
+- **FR-UI-3** Saved profiles + TUI editor. Named **sim profiles** (`config/sims/<name>.toml`, a
+  `RunSpec`) and **play profiles** (`config/play/<name>.toml`: bots, think-ms, hints, review budget,
+  bankroll, game pool) are TOML files: readable, diffable, can be committed. `dc sim --profile <name>` /
+  `dc play --profile <name>` load them; explicit flags override profile fields. `dc config` opens a
+  terminal UI (ratatui) to list, create, copy, edit, validate, and delete profiles. Milestone M6.
 - **FR-UI-2** All engine I/O (observations, actions, events, evaluations) is `serde`-serializable.
   A later web server (WebSocket) is a transport adapter, not a rewrite.
+
+### 5.9 Simulation program (Phase 2, track S; `docs/tech/sim-program.md`)
+- **FR-SP-1** Campaigns: a TOML file expands to many runs (games × seat counts × bot populations × config
+  sweeps). `dc campaign plan` estimates time and disk before running.
+- **FR-SP-2** Unattended background execution on the dev PC: frozen binary copy, chunked and resumable runs,
+  pause/resume, lowered priority, thread cap (default cores − 2).
+- **FR-SP-3** Self-contained offline HTML report per run and per campaign. Every number shows n and 95 % CI.
+- **FR-SP-4** Balance campaign: per-game variance, pot sizes, showdown rate, positional EV, winning hand
+  categories, declaration outcomes, and the effect of house-rule config sweeps.
+- **FR-SP-5** Strength ladder: per-game ratings of strength presets with CIs, and a check of FR-BT-5 (same
+  τ ⇒ similar EV loss per decision in every game).
+- **FR-SP-6** Strategy study: starting-hand EV grids and batch spot-analysis grids. Requires the rollout fix
+  (handbook backlog #1) before results are trusted.
+- **FR-SP-7** Blueprints: MCCFR for Indian Poker and 3-2-1 Drop, then abstracted heads-up Hold'em.
+- **FR-SP-8** Every summary records binary sha, game version, and sweep values, so stale results are detectable.
+
+### 5.10 Full game catalog (Phase 2, track G; `docs/tech/game-catalog.md`)
+- **FR-GC-1** All 50 Bible games playable in CLI, sims and web, including non-poker games.
+- **FR-GC-2** API v2 (`API_VERSION` 2): `Carry` + `GameLength::UntilDone` for multi-hand games, `view()`
+  for graphical UIs. Existing games migrate.
+- **FR-GC-3** Engine additions: jokers, stuns (`Penalty`), N-way pot shares, pluggable evaluators (Omaha 2o2,
+  2-7, Badugi, short deck, 3-card, board geometry, numbers, spade halves, single card), per-seat wilds.
+- **FR-GC-4** Ambiguous rules are decided, recorded as `D-*` decisions in the catalog plan and module docs, covered
+  by a rule test, and flagged in the PR for the owner (OQ-8).
+- **FR-GC-5** Bible "Variations" are `Config` flags, default off, sweepable in sims.
+- **FR-GC-6** Implemented by mechanic family, one PR per family (G0–G10).
+- **FR-GC-7** Every new evaluator has a brute-force oracle test.
+- **FR-GC-8** "If you're out you're out" is a session-level flag for UntilDone/Orbit games.
+
+### 5.11 Web multiplayer (Phase 2, track W; `docs/tech/web.md`)
+- **FR-WB-1** Server-authoritative `server` crate (axum + WebSocket); clients only ever receive their own seat's view.
+- **FR-WB-2** Discord OAuth sign-in; optional guild allowlist; admin list. No passwords.
+- **FR-WB-3** Lobby: create a table, invite link, sit/stand/sit-out, host start.
+- **FR-WB-4** Dealer's Choice flow as FR-SS-4, with a game picker for the chooser.
+- **FR-WB-5** Play-money bankroll per account on the existing ledger; starting $100; optional settle-up page.
+- **FR-WB-6** Turn timers with a time bank; deterministic timeout actions; reconnect resumes the seat.
+- **FR-WB-7** Table chat (rate-limited, admin-moderated).
+- **FR-WB-8** Hand history replayed from the viewer's own observations only.
+- **FR-WB-9** Mobile-first responsive table; tested on iOS Safari and Android Chrome.
+- **FR-WB-10** Single Docker image, self-hosted behind the owner's reverse proxy; nightly SQLite backups.
+- **FR-WB-11** One generic renderer driven by `TableView`; no per-game client code.
+- **FR-WB-12** Humans only in web v1; the seat model admits bots later.
 
 ## 6. Non-functional requirements
 
@@ -271,7 +348,28 @@ House conventions that are engine-level, not per-game:
 | M3 | `sim` crate + instrumentation | Measured hands/s and bytes/hand per game and bot; storage format decided (FR-ST-2) |
 | M4 | Strength presets, coach (post-hand + live), spot analysis with ranges | Coach flags are stable across reruns with different seeds |
 | M5 | Follow the Queen driver | Plays house rules; written using only the "adding a game" guide (tests the guide) |
-| M6 | Storage + persistence (bankroll, sim output, blueprints) | Sessions survive restart; sim output queryable |
+| M6 | Storage + persistence (bankroll, sim output, blueprints); saved profiles + `dc config` TUI (FR-UI-3) | Sessions survive restart; sim output queryable; a profile made in the TUI runs with `--profile` |
+| M7 | Player analytics (FR-PA-1…4) | Stats and leak report reproduce known values on synthetic players with planted leaks (e.g. a bot that always calls the river) |
+| M8 | NPI → sustainment handoff: CI (fmt, clippy, tests per PR; nightly release-mode exhaustive + benchmark tests), sustainment handbook (architecture map, run/debug/replay, versioning and invalidation rules, release checklist, known limits, prioritized backlog), adding-a-game guide | Owner can add a game, change rules, cut a release, and diagnose a CI failure using only the docs |
+
+### 9.1 Phase 2 milestones (v0.2 draft)
+
+| ID | Deliverable | Exit criteria |
+|---|---|---|
+| M9 | Merge PRs #1–#18 in order (clippy fix for Rust 1.98 included in the plans PR), plus the Phase 2 plans PR | `main` builds; CI green on both OSes |
+| G0 | API v2 foundation (`game-catalog.md` §2) | v1 tests pass on v2; toy UntilDone game passes conformance |
+| G1–G10 | Game families (`game-catalog.md` §4), one PR each | Per-game definition of done (`game-catalog.md` §4) |
+| S1–S6 | Simulation program (`sim-program.md` §6) | Per milestone |
+| W1–W6 | Web multiplayer (`web.md` §12) | Per milestone |
+
+Sequencing: M9 → G0 → then three parallel tracks. S1–S3 start on Hold'em + FTQ immediately after M9; W1 needs
+G0's `view()`; each G family adds its games to the balance campaign and the web gallery.
+
+```
+M9 ─┬─ S1 → S2 → S3 (grows with G) → S4 → S5 → S6
+    └─ G0 ─┬─ G1 → G2 → G3 → G4 → G5 → G6 → G7 → G8 → G9 → G10
+           └─ W1 → W2 → W3 → W4 → W5 → W6
+```
 
 ## 10. Assumptions (with sensitivity)
 
@@ -285,20 +383,34 @@ House conventions that are engine-level, not per-game:
 | A6 | ~0.5 s per bot decision is acceptable during play | Strength presets would need re-tuning |
 | A7 | FTQ bet/raise increments are any multiple of $0.50 from $0.50 to $2.00 (confirmed) | — |
 | A8 | FTQ "best board": visible wilds count; no partial straights/flushes; ties → closest to dealer's left | Only the action-order function changes |
+| A9 | Every game except Texas Hold'em uses the FTQ structure unless its Bible section has its own money rules (`game-catalog.md` §3, owner decision) | Config change per game + version bump; sims re-run |
+| A10 | Sims run on the dev PC only, sharing it with development | Campaign estimates are for ~12 threads; a cloud box only changes `--threads` |
+| A11 | The web group is small (≤ ~30 accounts, ≤ 5 concurrent tables): one process + SQLite suffices | Move to Postgres and multiple processes (storage.md §4) |
+| A12 | Discord is the only identity provider | Add providers behind the same `account` table |
 
 ## 11. Open questions
 
 - ~~OQ-1~~ Resolved: A7 confirmed (spread $0.50–$2.00). First to act on each street = best
   board showing (see §7).
 - ~~OQ-2~~ Resolved: wild plays as best possible card for high and low.
-- **OQ-3** "Both" declaration edge cases: exact payout when the Both declarer loses one side and nobody
-  else declared that side.
+- ~~OQ-3~~ Resolved (2026-11-10): a failed Both declarer is out of the pot and the others take it (if nobody
+  declared the other side, the challengers take the whole pot). If **every** remaining contestant failed Both,
+  the pot is split **evenly** among them (implemented in G0).
 - ~~OQ-4~~ Resolved: dealer ante applies to every game.
-- **OQ-5** Range notation for stud games (no standard notation exists). Candidates: card-level weights,
-  or hand-category weights.
+- ~~OQ-5~~ Resolved (2026-11-10): stud-game ranges use **hand-category weights** (e.g. `trips+: 2, pair: 1,
+  high: 0.3`), applied to what the hidden cards make with the visible board.
 - ~~OQ-6~~ Resolved: FR-SS-3.
-- **OQ-7** Coach mode in multiway pots: EV against the ISMCTS opponent model only, or against a
-  user-chosen opponent model?
+- ~~OQ-7~~ Resolved (2026-11-10): the ISMCTS opponent model by default; an option to choose a preset or a stored
+  player's tendencies comes with opponent modeling (handbook backlog #2).
+- **OQ-8** Partly resolved (2026-11-10). The owner confirmed D-ALL-1 (FTQ structure for every game except Texas
+  Hold'em), D-SW-1, D-TEM-1, D-CHI-1 (any of the 7 cards), D-CHI-2, D-357-1, D-DB-1, D-DB-2, D-BJ-1, D-BJ-2. The other
+  `D-*` decisions in `game-catalog.md` §5 stay provisional and are flagged in each family PR.
+- ~~OQ-9~~ Resolved (2026-11-10): the stun cap starts at $10, and within one hand each additional stunned player's
+  cap is $N higher; the chooser picks N per game. Details and D-STUN-1/2: `game-catalog.md` §3.
+- ~~OQ-10~~ Resolved (2026-11-10): 30 s per decision + 60 s time bank per game; timeout = check, else fold;
+  declarations default High; host can change per table.
+- ~~OQ-11~~ Resolved (2026-11-10): Linux x86-64 + Docker; Caddy bundled in compose for TLS; domain set at deploy
+  time; sign-in restricted to the owner's Discord server; the owner creates the Discord app using `deploy/README.md`.
 
 ## 12. Glossary
 

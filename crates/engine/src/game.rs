@@ -209,7 +209,11 @@ impl HandSetup {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ActionClass {
     Fold,
-    CheckOrCall,
+    /// `owed` = what calling costs; zero means this is a check. Stats need the difference
+    /// (a check isn't "voluntarily putting money in"; a call is).
+    CheckOrCall {
+        owed: Chips,
+    },
     BetOrRaise {
         to: Chips,
     },
@@ -249,7 +253,8 @@ pub trait Game: Send + Sync + Sized + 'static {
     type Action: Copy + fmt::Debug + Eq + Hash + Ord + Serialize + DeserializeOwned + Send + Sync;
     /// One seat's view of the hand. Two states with equal observations for a seat must be
     /// indistinguishable to that seat; equality defines an information set.
-    type Observation: Clone + fmt::Debug + Eq + Hash + Serialize + Send + Sync;
+    /// `DeserializeOwned` because saved blueprints are keyed by observations.
+    type Observation: Clone + fmt::Debug + Eq + Hash + Serialize + DeserializeOwned + Send + Sync;
     /// Per-game tunables (blinds, structure, bot bet menu).
     type Config: Clone + fmt::Debug + Default + Serialize + DeserializeOwned + Send + Sync;
 
@@ -301,8 +306,36 @@ pub trait Game: Send + Sync + Sized + 'static {
 
     fn classify(&self, s: &Self::State, a: Self::Action) -> ActionClass;
 
+    /// Cards only `seat` holds (hole cards, stud downcards). Used by player analytics for range
+    /// charts. Default: none (games where this doesn't apply).
+    fn private_cards(&self, _s: &Self::State, _seat: Seat) -> CardVec {
+        CardVec::new()
+    }
+
     /// Value unit for EV display and bot temperature: the big blind or the ante.
     fn eval_unit(&self) -> Chips;
+
+    // ----- Text interface (optional; used by the CLI) ----------------------------------------
+    //
+    // These live on the trait (with defaults) rather than in the CLI because the registry only
+    // hands out `G: Game`; a separate rendering trait would need a second per-game registry.
+
+    /// Human-readable view of what a seat sees. Default: `Debug`.
+    fn describe_observation(&self, obs: &Self::Observation) -> String {
+        format!("{obs:#?}")
+    }
+
+    /// Human-readable action. Default: `Debug`.
+    fn describe_action(&self, a: Self::Action) -> String {
+        format!("{a:?}")
+    }
+
+    /// Parse free-form human input (e.g. `"r 6.50"`) into an action; `legal` is the bot menu
+    /// for context. Return `None` if the text isn't understood. Default: understands nothing,
+    /// so humans pick from the numbered menu.
+    fn parse_action(&self, _input: &str, _legal: &[Self::Action]) -> Option<Self::Action> {
+        None
+    }
 }
 
 /// Pick from `(item, probability)` pairs. Probabilities need not be normalized.

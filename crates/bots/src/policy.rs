@@ -21,6 +21,16 @@ pub trait Policy<G: Game>: Send {
 
     /// Short label for logs and reports, e.g. `"ismcts:7"`.
     fn name(&self) -> String;
+
+    /// The table rejected the chosen action (e.g. a human typed an off-menu amount that's not
+    /// legal). Return `true` to be asked again. Default `false`: a bot choosing an illegal
+    /// action is a bug, and the table panics.
+    fn on_rejected(&mut self, _error: &engine::IllegalAction) -> bool {
+        false
+    }
+
+    /// Called once when the hand ends, with this seat's payoff. Lets a human UI show results.
+    fn on_hand_end(&mut self, _payoff: engine::Chips) {}
 }
 
 /// One action's estimated value from an [`Evaluator`].

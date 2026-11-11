@@ -1,0 +1,15 @@
+[package]
+name = "storage"
+description = "Persistence: SQLite app state (players, ledger, hands), sim output files, blueprints"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+engine = { path = "../engine" }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sim = { path = "../sim" }
+toml = { workspace = true }
+zstd = { workspace = true }

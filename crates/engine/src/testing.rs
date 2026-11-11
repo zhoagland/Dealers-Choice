@@ -280,7 +280,7 @@ mod tests {
         decisions: Vec<(Seat, Act)>,
     }
 
-    #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+    #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
     struct Obs {
         seat: Seat,
         n: u8,
@@ -451,7 +451,7 @@ mod tests {
             match a {
                 Act::Deal(_) => ActionClass::Chance,
                 Act::Fold => ActionClass::Fold,
-                Act::Stay => ActionClass::CheckOrCall,
+                Act::Stay => ActionClass::CheckOrCall { owed: Chips::ZERO },
             }
         }
         fn eval_unit(&self) -> Chips {

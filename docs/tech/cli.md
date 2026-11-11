@@ -15,6 +15,14 @@ Implements FR-UI-1, FR-UI-2.
 | `dc replay <hand-id or file>` | Step through a recorded hand | M2 |
 | `dc player add|list|deposit|reset` | Profile and bankroll management | M6 |
 
+## CPU use
+
+- `dc play`: bots think only on their own turn, on one core, capped by `--think-ms` (default
+  500). Nothing runs while the human decides; there is no pondering. The coach review runs after each
+  hand (`--review-playouts`); live hints (`--hints`) run before each human decision.
+- `dc sim` / `dc bench-sim`: all cores by default; `--threads N` limits them. Results are identical
+  for any thread count.
+
 ## Play loop
 
 ```
@@ -25,8 +33,8 @@ Session<G>  ──► hand loop ──► to_act():
                                Terminal    → payoffs → ledger → coach (background)
 ```
 
-- **Rendering:** `trait Render<G: Game> { fn render(&self, obs: &G::Observation) -> String; }`
-  implemented per game in `cli`. Text table, card glyphs, pot, to-call, legal actions.
+- **Rendering:** via the `Game` text hooks (`describe_observation`, `describe_action`,
+  `parse_action`; see the API doc §9). Humans pick a numbered menu item or type `f` / `c` / `r 6.50`.
 - **Input grammar:** `f`, `c` (check/call), `r 6.50` (raise to), `b 2` (bet), `h`/`l`/`hl`
   (declare), meta commands `:hints on|off`, `:review`, `:quit`. Off-menu amounts are allowed;
   `validate` gives the error message.

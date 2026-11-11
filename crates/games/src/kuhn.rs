@@ -49,7 +49,7 @@ pub struct State {
     history: SmallVec<[Action; 3]>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Observation {
     pub seat: Seat,
     pub button: Seat,
@@ -278,7 +278,8 @@ impl Game for Kuhn {
     fn classify(&self, _s: &State, a: Action) -> ActionClass {
         match a {
             Action::Deal(_) => ActionClass::Chance,
-            Action::Check | Action::Call => ActionClass::CheckOrCall,
+            Action::Check => ActionClass::CheckOrCall { owed: Chips::ZERO },
+            Action::Call => ActionClass::CheckOrCall { owed: Chips(1) },
             Action::Bet => ActionClass::BetOrRaise { to: Chips(2) },
             Action::Fold => ActionClass::Fold,
         }
@@ -286,6 +287,46 @@ impl Game for Kuhn {
 
     fn eval_unit(&self) -> Chips {
         Chips(1)
+    }
+
+    fn private_cards(&self, s: &State, seat: Seat) -> engine::CardVec {
+        s.cards.get(s.order_of(seat)).copied().into_iter().collect()
+    }
+
+    fn describe_observation(&self, obs: &Observation) -> String {
+        let card = obs
+            .own
+            .map(|c| c.rank().to_char().to_string())
+            .unwrap_or("?".into());
+        let hist: Vec<String> = obs
+            .history
+            .iter()
+            .map(|a| self.describe_action(*a))
+            .collect();
+        let mut s = format!(
+            "You ({}): {card}   history: [{}]",
+            obs.seat,
+            hist.join(", ")
+        );
+        if let Some(c) = obs.revealed {
+            s += &format!("   opponent shows {}", c.rank().to_char());
+        }
+        s
+    }
+
+    fn describe_action(&self, a: Action) -> String {
+        match a {
+            Action::Deal(c) => format!("deal {}", c.rank().to_char()),
+            other => format!("{other:?}").to_lowercase(),
+        }
+    }
+
+    fn parse_action(&self, input: &str, legal: &[Action]) -> Option<Action> {
+        let want = input.trim().to_lowercase();
+        legal
+            .iter()
+            .copied()
+            .find(|&a| self.describe_action(a).starts_with(&want) && !want.is_empty())
     }
 }
 
