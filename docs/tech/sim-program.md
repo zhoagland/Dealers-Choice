@@ -120,6 +120,42 @@ MCCFR needs small games or abstraction (bots.md §3).
   bet menu. Multi-day CPU training; checkpointed (same chunk/resume model).
 - Blueprints are stored per FR-ST-3 and loaded by an MCCFR policy in play and sims.
 
+### 4.5 Study campaigns: `dc analyze` (built ahead of S5, 2026-11-10)
+
+Owner request (2026-11-10): "a script to start a simulation that tests every game for millions of hands … a
+dashboard per game describing the best starting hand, the hands that should and shouldn't be played … then board
+variants to see hand strength, when to bet, how much to bet." A **hand** = one deal played to showdown or until
+everyone else folds. **Every** simulated hand feeds the aggregates; nothing is sampled.
+
+- `dc analyze run [--games a,b] [--hands N] [--bots spec,...] [--seats N] [--chunk N] [--seed N] [--threads N]`
+  creates or updates `<data_root>/analysis/<name>/campaign.toml` and runs it. Defaults: every registered game
+  except the solver fixtures, 6 seats (or the game's max), `ismcts:3:300` in every seat, all cores but two.
+  `pause`, `status`, `report` (rebuild dashboards from chunks).
+- Chunks have independent seeds; a killed or paused run resumes by skipping finished `chunk-*.json` files.
+  `status.json` is rewritten after every chunk, and each game's `dashboard.html` is regenerated.
+- **Storage:** no per-hand records. `sim::study` keeps running means (Welford) per key, so millions of hands cost
+  kilobytes per chunk.
+- **Starting hands:** result per (starting-hand class, position from the button, first action). Comparing fold
+  with call/raise for the same class and position ranks hands as play / don't play.
+- **Decisions:** result per (street, board texture, hand-strength bucket, action). Bets are bucketed by size
+  relative to the pot (`SizeBucket`: ⅓, ⅔, pot, over, all-in); non-betting choices use the game's label (e.g.
+  "declare High"). The dashboard pivots rows by hand strength or by board texture.
+- Games opt in through the analysis hooks on `Game` (starting-hand class, decision context, labels); Hold'em and
+  FTQ have them. Each new family PR adds them so its games appear in `dc analyze`.
+- Caveat printed on every dashboard: these are outcomes of the bot population's own play, not solved values,
+  and inherit the ISMCTS biases in §4.3.
+
+### 4.6 Local campaign UI: `dc lab` (requested 2026-11-10, not built)
+
+Owner request: "a local HTML interface for configuring and starting simulation campaigns."
+- `dc lab` starts a localhost-only HTTP server (bound to 127.0.0.1, random free port, opens the browser) that
+  serves one page: pick games, hands, bots per seat, seats, threads; save as `campaign.toml`; start / pause /
+  resume; live progress from `status.json`; links to each `dashboard.html` and `index.html`.
+- Runs are spawned as a detached `dc analyze run --name <n>` process, so closing the page or the server never
+  kills a campaign. The UI is a thin editor over the same files the CLI uses.
+- No auth (loopback only); the server refuses non-loopback `Host` headers.
+- Later: same page drives Phase 2 campaign kinds (§1) once `dc campaign` exists.
+
 ## 5. Storage
 
 Unchanged layout (`storage.md` §1) plus:
