@@ -23,6 +23,7 @@ pub mod high;
 pub mod low_a6;
 pub mod oracle;
 pub mod partial_board;
+pub mod registry;
 
 use std::fmt;
 
@@ -31,6 +32,7 @@ use serde::{Deserialize, Serialize};
 pub use high::{eval_high, eval_high_wild};
 pub use low_a6::{eval_low_a6, eval_low_a6_wild};
 pub use partial_board::eval_partial_board;
+pub use registry::{EVALUATORS, Evaluator, HandCards, evaluator};
 
 /// Hand categories in **house order**, worst to best. The discriminant (`= 0`, `= 1`, …) is the
 /// value stored in the top 4 bits of a [`HandValue`].

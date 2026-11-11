@@ -93,6 +93,9 @@ Engine work in G0, besides the trait:
   declarations (Chicago). A share nobody can win rolls into the others; odd chips go to earlier shares. OQ-3
   even split is in; FTQ `meta.version` 1 → 2.
 - `eval::Evaluator` trait + registry so evaluators are reused across games and oracle-tested in one place.
+  **Done 2026-11-11:** `eval::{Evaluator, HandCards { private, board, wild }, EVALUATORS, evaluator(id)}` with
+  `high` and `low_a6`; one test checks every registered evaluator against its oracle (54-card deck, jokers,
+  wild ranks). Hold'em and FTQ keep calling the fast functions directly; new families use the registry.
 - `engine::testing` conformance: C4 (no leaks) learns about inverted information (the observer's *own*
   cards must vary across determinizations in Indian games; others' cards must not).
 - Session: drive `UntilDone`, persist carry between hands, and support the "if you're out you're out"
