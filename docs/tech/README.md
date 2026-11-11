@@ -11,6 +11,9 @@
 | [cli.md](cli.md) | `cli` | M2, M4, M6 | FR-UI-* |
 | [../dev/adding-a-game.md](../dev/adding-a-game.md) | `games` | M5 | FR-GD-6 |
 | [../dev/handbook.md](../dev/handbook.md) | all | M8 | sustainment |
+| [game-catalog.md](game-catalog.md) | `engine`, `games` | G0–G10 (Phase 2) | FR-GC-* |
+| [sim-program.md](sim-program.md) | `sim`, `cli` | S1–S6 (Phase 2) | FR-SP-* |
+| [web.md](web.md) | `protocol`, `server`, `web/` | W1–W6 (Phase 2) | FR-WB-* |
 
 ## Workspace layout
 
