@@ -224,10 +224,11 @@ check; per-connection and per-account rate limits; message size cap (16 KB); inp
 | W4 | Chat + hand history (viewer-filtered replay) | Leak test: replaying any stored hand as each viewer never shows a card that viewer couldn't see live |
 | W5 | Mobile polish, Docker image, deploy docs, backups | Session played on phones; deployed on the owner's server behind TLS |
 | W6 | Every game family's `view()` in the gallery; optional `/reports` for sim reports | Each catalog family PR adds its games to the gallery |
+| W7 | Discord Activity entry point (§13): Embedded App SDK auth, one table per Activity instance, iframe layout | The group launches a table from a Discord voice channel on desktop and phone and plays an FTQ hand |
 
 W1 starts after G0 (it needs `view()`). After that, web work runs in parallel with the game families and sims.
 
-## 13. Discord Activity (proposed 2026-11-11, owner to decide)
+## 13. Discord Activity (added 2026-11-11 as W7; owner can drop it)
 
 Owner question: "is it possible to play the app in Discord too as a live activity?" Yes. A Discord **Activity**
 is a web app that Discord shows in an iframe inside a voice channel (desktop, browser and mobile clients). People

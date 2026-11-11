@@ -13,6 +13,7 @@ pub mod pot;
 pub mod replay;
 pub mod rng;
 pub mod session;
+pub mod showdown;
 pub mod testing;
 pub mod view;
 

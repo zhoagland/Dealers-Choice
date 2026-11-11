@@ -21,6 +21,7 @@ use bots::ismcts::{Ismcts, IsmctsConfig};
 use bots::{Budget, IsmctsBot, Policy, play_hand_with};
 use engine::rng::{Stream, derive_rng, rng_from_seed};
 use engine::session::{SeatInfo, SeatKind, SessionEvent, Table};
+use engine::showdown::{may_show, own_hidden_cards};
 use engine::{Chips, Game, GameCarry, Seat, StakeModel};
 use games::registry::{GAME_IDS, GameVisitor, with_game};
 use sim::encoding::{HandRecord, encode, encode_carry};
@@ -300,6 +301,25 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
                     result.payoffs[i].to_string()
                 );
             }
+            // Optional show (G-3): a human who lost at showdown may show instead of mucking.
+            // Bots always muck.
+            let mut shown_by_choice = Vec::new();
+            for p in may_show(&game, &end) {
+                if Some(p) != human_seat {
+                    continue;
+                }
+                let cards = own_hidden_cards(&game, &end, p);
+                let list: Vec<String> = cards.iter().map(|c| c.to_string()).collect();
+                let answer = read_line(&format!("Show your hand ({})? [y/N] ", list.join(" ")));
+                if answer.eq_ignore_ascii_case("y") {
+                    println!(
+                        "  {} shows {}",
+                        table.seats[map[p.index()]].name,
+                        list.join(" ")
+                    );
+                    shown_by_choice.push(p.0);
+                }
+            }
             let mut reviews: Vec<DecisionReview<G::Action>> = Vec::new();
             if let (Some(h), true) = (human_seat, self.settings.review) {
                 let mut search = Ismcts::<G>::new(IsmctsConfig::default());
@@ -317,7 +337,7 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
                 print_review(&game, &reviews);
             }
             if let (Some(p), Some(h)) = (self.persist.as_deref_mut(), human_seat) {
-                let record = encode(&HandRecord::new(
+                let mut rec = HandRecord::new(
                     game.meta().id,
                     game.meta().version,
                     hand,
@@ -326,7 +346,9 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
                     setup.clone(),
                     encode_carry(carry.carry()),
                     result.actions.clone(),
-                ));
+                );
+                rec.shown_by_choice = shown_by_choice.clone();
+                let record = encode(&rec);
                 let stored = StoredHand {
                     session_id: p.session_id,
                     player_id: p.player_id,

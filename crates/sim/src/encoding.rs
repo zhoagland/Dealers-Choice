@@ -25,6 +25,9 @@ pub struct HandRecord<A> {
     /// empty for games without one), so every hand of an `UntilDone` game replays on its own.
     pub carry_in: Vec<u8>,
     pub actions: Vec<A>,
+    /// Seats that chose to show a losing hand (optional show, G-3). Their cards are recovered by
+    /// replaying the hand; hand history shows them.
+    pub shown_by_choice: Vec<u8>,
 }
 
 impl<A> HandRecord<A> {
@@ -49,6 +52,7 @@ impl<A> HandRecord<A> {
             setup,
             carry_in,
             actions,
+            shown_by_choice: Vec::new(),
         }
     }
 }

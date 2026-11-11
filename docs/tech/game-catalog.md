@@ -85,7 +85,10 @@ Engine work in G0, besides the trait:
 - Both-declaration fallback (OQ-3, owner decision): if every remaining contestant failed a Both declaration,
   the pot is **split evenly** among them (today it's split as hi/lo). Changes `pot::award_declared`; FTQ's
   `meta.version` bumps.
-- Optional show (G-3): losing players may Show or Muck after required shows.
+- Optional show (G-3): losing players may Show or Muck after required shows. **Done 2026-11-11:** outside the game
+  state machine (it can't change chips, so bots never face it). `engine::showdown::{may_show, own_hidden_cards}`
+  work for any game through `view()`: a seat may show if it lost, didn't fold, and its face-down cards are still
+  hidden. `dc play` asks the human; bots muck. `HandRecord::shown_by_choice` keeps the choice for hand history.
 - `pot::award_shares`: a pot split into named shares (High, Low, Top board, Spade, …), each with its own
   ranking and eligible set, with the existing Both-declaration rule applied per share pair. Replaces
   `award_declared` (kept as a thin wrapper). **Done 2026-11-11:** `pot::award_shares(pots, shares, claims,

@@ -1085,4 +1085,55 @@ mod tests {
             "below min raise"
         );
     }
+
+    #[test]
+    fn optional_show_offered_to_losers_who_reached_showdown_with_hidden_cards() {
+        use engine::rng::{Stream, derive_rng};
+        use engine::showdown::{may_show, own_hidden_cards};
+        use rand::seq::IndexedRandom;
+        let g = Holdem::new(Config::default());
+        let mut offered = 0;
+        for hand in 0..400u64 {
+            let setup = HandSetup::simple(4, Chips(2_000));
+            let mut s = g.new_hand(&setup);
+            let mut rng = derive_rng(11, hand, Stream::Deal);
+            let mut legal = Vec::new();
+            loop {
+                let a = match g.to_act(&s) {
+                    ToAct::Terminal => break,
+                    ToAct::Chance => g.sample_chance(&s, &mut rng),
+                    ToAct::Seat(_) => {
+                        g.legal_actions(&s, &mut legal);
+                        // Mostly passive play, so hands often reach showdown.
+                        let passive: Vec<_> = legal
+                            .iter()
+                            .copied()
+                            .filter(|&a| {
+                                matches!(g.classify(&s, a), ActionClass::CheckOrCall { .. })
+                            })
+                            .collect();
+                        *if passive.is_empty() || rng.random_bool(0.1) {
+                            &legal
+                        } else {
+                            &passive
+                        }
+                        .choose(&mut rng)
+                        .unwrap()
+                    }
+                };
+                g.apply(&mut s, a);
+            }
+            let pay = g.payoffs(&s);
+            for p in may_show(&g, &s) {
+                offered += 1;
+                assert!(pay[p.index()] < Chips::ZERO, "only losers may show");
+                assert!(!s.betting.is_folded(p), "folded seats can't show");
+                assert_eq!(
+                    own_hidden_cards(&g, &s, p).as_slice(),
+                    &s.hole[p.index()][..]
+                );
+            }
+        }
+        assert!(offered > 0, "some showdown loser should have mucked");
+    }
 }
