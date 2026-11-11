@@ -67,6 +67,7 @@ pub fn run(args: StatsArgs, root: &DataRoot) -> CliResult {
         let visitor = GameStats {
             rows,
             notes: &notes,
+            quiet: false,
         };
         let stats = with_game(game_id, None, visitor).map_err(|e| e.to_string())??;
         overall.aggressive += stats.aggressive;
@@ -86,6 +87,30 @@ pub fn run(args: StatsArgs, root: &DataRoot) -> CliResult {
 struct GameStats<'a> {
     rows: &'a [HandRow],
     notes: &'a [(i64, storage::Note)],
+    /// Compute only; print nothing.
+    quiet: bool,
+}
+
+/// A player's VPIP over their stored hands of every game that tracks it, and the number of
+/// hands behind it (FR-PA-5 exploit bots read it). `None` without stored hands.
+pub fn vpip(db: &Db, player: i64) -> Option<(f64, u64)> {
+    let hands = db.hands(player).ok()?;
+    let mut by_game: BTreeMap<String, Vec<HandRow>> = BTreeMap::new();
+    for row in hands {
+        by_game.entry(row.game_id.clone()).or_default().push(row);
+    }
+    let mut total = Ratio::default();
+    for (game_id, rows) in &by_game {
+        let visitor = GameStats {
+            rows,
+            notes: &[],
+            quiet: true,
+        };
+        if let Ok(Ok(stats)) = with_game(game_id, None, visitor) {
+            total.merge(&stats.vpip);
+        }
+    }
+    Some((total.p()?, total.chances))
 }
 
 impl GameVisitor<Result<PlayerStats, String>> for GameStats<'_> {
@@ -118,6 +143,9 @@ impl GameVisitor<Result<PlayerStats, String>> for GameStats<'_> {
             spots_by_hand.insert(row.id, spots);
         }
 
+        if self.quiet {
+            return Ok(stats);
+        }
         let m = game.meta();
         println!(
             "\n=== {} ({} hands{}) ===",

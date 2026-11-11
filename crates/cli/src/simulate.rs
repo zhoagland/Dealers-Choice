@@ -230,6 +230,18 @@ fn print_report(r: &RunReport) {
         t.bytes_per_hand,
         t.mb_per_day_full_history
     );
+    // External bots (FR-BT-8): calls, cache hits, failures and latency per model.
+    for (model, m) in sim::external::metrics() {
+        println!(
+            "  external {model}: {} decisions, {} cache hits, {} calls (mean {:.1} ms, max {:.1} ms), {} fell back",
+            m.decisions,
+            m.cache_hits,
+            m.calls,
+            m.mean_latency_ms(),
+            m.max_latency_ms,
+            m.failures
+        );
+    }
 }
 
 #[derive(Args)]

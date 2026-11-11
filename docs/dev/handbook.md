@@ -206,10 +206,11 @@ playouts/s/thread (Hold'em), ~55 k (FTQ). Full table: `docs/tech/sim.md` §5.
 ## 8. Backlog (prioritized)
 
 1. **Better rollout policy** (equity-aware instead of check-down). Fixes the most visible coach bias.
-2. **FR-PA-5 exploitative bots / opponent model**: weight determinization by the player's
-   observed tendencies (from `dc stats`), with capped deviation.
+2. ~~FR-PA-5 exploitative bots~~: built (VPIP read, `bots/src/exploit.rs`, `dc play --exploit`). Next: ranges
+   by position and action instead of one VPIP.
 3. **Web UI**: built (`crates/server`, `web/`). Still to do with the group: a session on real phones and the deploy on the owner's server (W5 exit), launching from a voice channel (W7 exit).
-4. **FR-BT-8 external policy adapter (Jev)**: protocol in `docs/tech/bots.md` §6.
+4. ~~FR-BT-8 external policy adapter~~: built (`ext:<spec.toml>`, `sim/src/external.rs`). Next: Jev's real
+   endpoint when access arrives.
 5. ~~`UntilDone` games~~: done in G0/G8.
 6. ~~More Bible games~~: all 50 done (track G).
 7. **HUNL MCCFR** with card/action abstraction (`Abstraction` trait; bots.md §3).

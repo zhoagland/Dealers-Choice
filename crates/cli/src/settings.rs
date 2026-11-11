@@ -33,6 +33,8 @@ pub struct PlayProfile {
     pub max_games: u32,
     /// "If you're out you're out" in multi-hand games (FR-GC-8).
     pub out_is_out: bool,
+    /// Bots read your stored tendencies (VPIP) when they imagine your cards (FR-PA-5).
+    pub exploit: bool,
 }
 
 impl Default for PlayProfile {
@@ -54,6 +56,7 @@ impl Default for PlayProfile {
             think_ms: 500,
             max_games: 1_000,
             out_is_out: false,
+            exploit: false,
         }
     }
 }
@@ -99,6 +102,10 @@ pub struct PlayArgs {
     /// the game.
     #[arg(long)]
     pub out_is_out: bool,
+    /// Exploitative bots: they weight your hidden cards by your stored VPIP (`dc stats`), with a
+    /// capped deviation (FR-PA-5). Needs at least 30 stored hands of two-card games.
+    #[arg(long)]
+    pub exploit: bool,
 }
 
 impl PlayArgs {
@@ -136,6 +143,9 @@ impl PlayArgs {
         }
         if self.out_is_out {
             base.out_is_out = true;
+        }
+        if self.exploit {
+            base.exploit = true;
         }
         base
     }

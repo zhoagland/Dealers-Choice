@@ -3,6 +3,7 @@
 
 pub mod baseline;
 pub mod coach;
+pub mod exploit;
 pub mod harness;
 pub mod ismcts;
 pub mod mccfr;

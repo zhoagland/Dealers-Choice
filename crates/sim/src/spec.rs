@@ -26,6 +26,16 @@ pub enum BotSpec {
     Blueprint {
         path: String,
     },
+    /// ISMCTS at `level` that reads every opponent as a player with this VPIP (percent) when it
+    /// imagines their hidden cards (FR-PA-5, `bots::exploit`).
+    Exploit {
+        level: u8,
+        vpip: u8,
+    },
+    /// An external policy described by a TOML file (FR-BT-8, `external.rs`).
+    External {
+        path: String,
+    },
 }
 
 impl BotSpec {
@@ -38,6 +48,24 @@ impl BotSpec {
             BotSpec::Maniac => Box::new(bots::baseline::Maniac),
             BotSpec::Blueprint { ref path } => {
                 Box::new(BlueprintPolicy::new(cached_blueprint::<G>(game, path)))
+            }
+            BotSpec::Exploit { level, vpip } => {
+                let mut bot = IsmctsBot::<G>::new(
+                    bots::Strength::preset(level, false),
+                    bots::Style::default(),
+                    format!("exploit:{level}:{vpip}"),
+                );
+                let models = (0..9u8)
+                    .map(|s| (engine::Seat(s), vpip as f64 / 100.0))
+                    .collect();
+                bot.set_sampler(Box::new(bots::exploit::sampler(
+                    &models,
+                    bots::exploit::DEFAULT_CAP,
+                )));
+                Box::new(bot)
+            }
+            BotSpec::External { ref path } => {
+                Box::new(crate::external::ExternalPolicy::new(game, path))
             }
             BotSpec::Ismcts { level, playouts } => {
                 let mut bot = IsmctsBot::<G>::preset(level, false);
@@ -72,6 +100,11 @@ impl std::str::FromStr for BotSpec {
                 path: path.to_string(),
             });
         }
+        if let Some(path) = s.strip_prefix("ext:") {
+            return Ok(BotSpec::External {
+                path: path.to_string(),
+            });
+        }
         let parts: Vec<&str> = s.split(':').collect();
         let num = |p: &str| {
             p.parse::<u32>()
@@ -85,12 +118,16 @@ impl std::str::FromStr for BotSpec {
                 level: num(l)?.clamp(1, 10) as u8,
                 playouts: None,
             }),
+            ["exploit", l, v] => Ok(BotSpec::Exploit {
+                level: num(l)?.clamp(1, 10) as u8,
+                vpip: num(v)?.clamp(1, 100) as u8,
+            }),
             ["ismcts", l, p] => Ok(BotSpec::Ismcts {
                 level: num(l)?.clamp(1, 10) as u8,
                 playouts: Some(num(p)?),
             }),
             _ => Err(format!(
-                "unknown bot {s:?}: use random, callstation, maniac, ismcts:<level>[:<playouts>], or mccfr:<file>"
+                "unknown bot {s:?}: use random, callstation, maniac, ismcts:<level>[:<playouts>], exploit:<level>:<vpip%>, mccfr:<file>, or ext:<spec.toml>"
             )),
         }
     }
@@ -103,6 +140,8 @@ impl std::fmt::Display for BotSpec {
             BotSpec::CallStation => write!(f, "callstation"),
             BotSpec::Maniac => write!(f, "maniac"),
             BotSpec::Blueprint { path } => write!(f, "mccfr:{path}"),
+            BotSpec::External { path } => write!(f, "ext:{path}"),
+            BotSpec::Exploit { level, vpip } => write!(f, "exploit:{level}:{vpip}"),
             BotSpec::Ismcts {
                 level,
                 playouts: None,
@@ -191,7 +230,7 @@ mod tests {
 
     #[test]
     fn bot_spec_round_trips() {
-        for s in ["random", "ismcts:7", "ismcts:3:500"] {
+        for s in ["random", "ismcts:7", "ismcts:3:500", "exploit:5:20"] {
             let b: BotSpec = s.parse().unwrap();
             assert_eq!(b.to_string(), s);
         }

@@ -129,6 +129,29 @@ pub fn run(args: PlayArgs, root: &DataRoot, profiles: &ProfileStore) -> CliResul
             sitting_out: false,
         });
     }
+    // FR-PA-5: bots read the human's stored VPIP when they imagine the human's cards.
+    let read = match (&persist, s.exploit) {
+        (Some(p), true) => match crate::stats::vpip(&p.db, p.player_id) {
+            Some((v, n)) if n >= 30 => {
+                println!(
+                    "Exploit bots: reading you as a {:.0}% VPIP player ({n} hands).",
+                    v * 100.0
+                );
+                Some(v)
+            }
+            _ => {
+                println!(
+                    "Exploit bots: fewer than 30 stored hands, so the bots play their default."
+                );
+                None
+            }
+        },
+        (None, true) => {
+            println!("Exploit bots need your stored hands; --no-save turns them off.");
+            None
+        }
+        _ => None,
+    };
     let mut table = Table::new(seats, Chips::dollars(100.0));
     table.out_is_out = s.out_is_out;
     let mut chooser_rng = derive_rng(seed, 0, Stream::Custom(1));
@@ -142,6 +165,7 @@ pub fn run(args: PlayArgs, root: &DataRoot, profiles: &ProfileStore) -> CliResul
             seed,
             hand_counter: &mut hand_counter,
             persist: persist.as_mut(),
+            read,
         };
         with_game(&id, None, visitor).map_err(|e| e.to_string())??;
         let you = table.seats[0].bankroll.unwrap_or_default();
@@ -216,6 +240,8 @@ struct PlayOneGame<'a> {
     seed: u64,
     hand_counter: &'a mut u64,
     persist: Option<&'a mut Persist>,
+    /// The human's VPIP, for exploit bots.
+    read: Option<f64>,
 }
 
 impl GameVisitor<CliResult> for PlayOneGame<'_> {
@@ -257,6 +283,15 @@ impl GameVisitor<CliResult> for PlayOneGame<'_> {
                                 .and_then(|l| l.parse().ok())
                                 .unwrap_or(5);
                             let mut bot = IsmctsBot::<G>::preset(level, true);
+                            if let (Some(v), Some(h)) =
+                                (self.read, map.iter().position(|&t| t == 0))
+                            {
+                                let models = [(engine::Seat(h as u8), v)].into_iter().collect();
+                                bot.set_sampler(Box::new(bots::exploit::sampler(
+                                    &models,
+                                    bots::exploit::DEFAULT_CAP,
+                                )));
+                            }
                             // Strong presets would think longer than the table's cap (PRD A6, --think-ms).
                             if let Budget::Time(t) = bot.strength.budget {
                                 bot.strength.budget = Budget::Time(

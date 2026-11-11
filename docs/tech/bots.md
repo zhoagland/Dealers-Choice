@@ -177,6 +177,18 @@ Output: the FR-EV-1 table.
 
 ## 6. External policies (FR-BT-8, post-v1)
 
+**Built (2026-11-11)** in `crates/sim/src/external.rs`. Name the bot `ext:<spec.toml>` anywhere a bot is
+accepted (`dc sim --bots`, campaign populations). The spec gives the model name, transport (`stdio`: a local
+program, one JSON request and one reply per line; `http`: POST JSON, bearer key from an environment variable),
+timeout, concurrency (a pool of programs or requests in flight), fallback bot and an optional cache file.
+Example: `config/external/example.toml` with `tools/external_bot_example.py`. `dc sim` prints per-model
+decisions, cache hits, calls, mean/max latency and fallbacks. As built vs the sketch below: the cache key is
+SHA-256 of the whole request (model, game, observation, legal actions); the transports are synchronous behind a
+shared pool rather than an async runner (sims already run hands in parallel); the request also carries a
+readable label per legal action. Jev's own endpoint and payload aren't public yet, so `http` sends our request
+format; a thin adapter on either side maps it when Jev access arrives.
+
+
 ```rust
 pub struct ExternalPolicy<T: Transport> { transport: T, cache: ResponseCache, fallback: Box<dyn …>, … }
 pub trait Transport { fn decide(&mut self, req: &DecisionRequest) -> Result<Vec<f64>, TransportError>; }
@@ -195,6 +207,21 @@ pub trait Transport { fn decide(&mut self, req: &DecisionRequest) -> Result<Vec<
 - **Evaluation:** an external policy has no Q values, so strength and coach don't apply to it. It's
   measured like any bot: bb/100 vs ISMCTS presets with duplicate deals, plus Kuhn exploitability
   (exact, cheap: ~12 infosets).
+
+## 6b. Exploitative bots (FR-PA-5, post-v1)
+
+**Built (2026-11-11)** in `crates/bots/src/exploit.rs`. When ISMCTS imagines an opponent's hidden cards it
+normally treats every unseen hand as equally likely. An exploit bot weights them by that player's **VPIP**: a
+player who enters 15 % of pots is read as holding the top 15 % of starting hands by the Chen formula. The
+deviation is **capped** (`DEFAULT_CAP` 0.7): hands outside the read keep 30 % weight, so a player who changes
+gears can't lead the bot far astray and the bot stays close to its default strategy.
+
+- `dc play --exploit` (or `exploit = true` in a play profile): the bots read the human's VPIP from their stored
+  hands (`dc stats`), once they have 30 or more.
+- `exploit:<level>:<vpip%>` in sims: ISMCTS at `level` reading every opponent at that VPIP.
+- Scope: two-card hidden hands (the Hold'em family); other games keep uniform sampling. The read applies to the
+  modelled seat whether or not it entered the current pot voluntarily (a checked big blind is read like a
+  caller); the cap bounds that error. A finer model (ranges by position and action) is future work.
 
 ## 7. Coach (FR-EV-3…5)
 

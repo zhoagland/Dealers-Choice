@@ -4,6 +4,7 @@
 pub mod analytics;
 pub mod balance;
 pub mod encoding;
+pub mod external;
 pub mod runner;
 pub mod spec;
 pub mod stats;
