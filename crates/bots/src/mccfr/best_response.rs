@@ -49,7 +49,7 @@ pub fn best_response_value<G: Game>(
 
     // Step 2: decide deepest-first.
     let mut order: Vec<(&G::Observation, &Group<G::State>)> = groups.iter().collect();
-    order.sort_by(|a, b| b.1.depth.cmp(&a.1.depth));
+    order.sort_by_key(|a| std::cmp::Reverse(a.1.depth));
     let mut choice: HashMap<G::Observation, G::Action> = HashMap::new();
     let mut legal = Vec::new();
     for (obs, group) in order {
