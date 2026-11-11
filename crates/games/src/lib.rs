@@ -5,6 +5,7 @@ pub mod analysis_util;
 pub mod blackjack;
 pub mod ftq;
 pub mod holdem;
+pub mod holdem_abstract;
 pub mod kuhn;
 pub mod leduc;
 pub mod registry;

@@ -31,13 +31,13 @@ pub enum BotSpec {
 impl BotSpec {
     /// A fresh bot. Sims always use **playout** budgets: time budgets depend on CPU speed and
     /// would make results irreproducible (tech/README rule 1).
-    pub fn build<G: Game>(&self) -> Box<dyn Policy<G>> {
+    pub fn build<G: Game>(&self, game: &G) -> Box<dyn Policy<G>> {
         match *self {
             BotSpec::Random => Box::new(RandomPolicy),
             BotSpec::CallStation => Box::new(bots::baseline::CallingStation),
             BotSpec::Maniac => Box::new(bots::baseline::Maniac),
             BotSpec::Blueprint { ref path } => {
-                Box::new(BlueprintPolicy::new(cached_blueprint::<G>(path)))
+                Box::new(BlueprintPolicy::new(cached_blueprint::<G>(game, path)))
             }
             BotSpec::Ismcts { level, playouts } => {
                 let mut bot = IsmctsBot::<G>::preset(level, false);
@@ -122,7 +122,7 @@ impl std::fmt::Display for BotSpec {
 /// `Arc<dyn Any>` and downcast back to `Blueprint<G>` on the way out. A path loaded as one game
 /// and requested as another fails the downcast and is reloaded (and then rejected by the game
 /// id check).
-fn cached_blueprint<G: Game>(path: &str) -> Arc<Blueprint<G>> {
+fn cached_blueprint<G: Game>(game: &G, path: &str) -> Arc<Blueprint<G>> {
     use std::any::Any;
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
@@ -135,17 +135,16 @@ fn cached_blueprint<G: Game>(path: &str) -> Arc<Blueprint<G>> {
     {
         return bp;
     }
-    let bp = Arc::new(load_blueprint::<G>(path));
+    let bp = Arc::new(load_blueprint::<G>(game, path));
     cache.lock().unwrap().insert(path.to_string(), bp.clone());
     bp
 }
 
 /// Read a blueprint file (postcard, see `bots::mccfr::blueprint`). Panics with a clear message if it
 /// can't be loaded: a sim with a missing bot can't produce meaningful results.
-fn load_blueprint<G: Game>(path: &str) -> Blueprint<G> {
+fn load_blueprint<G: Game>(game: &G, path: &str) -> Blueprint<G> {
     let raw = std::fs::read(path).unwrap_or_else(|e| panic!("blueprint {path}: {e}"));
-    let game = G::new(G::Config::default());
-    Blueprint::from_bytes(&game, &raw).unwrap_or_else(|e| panic!("blueprint {path}: {e}"))
+    Blueprint::from_bytes(game, &raw).unwrap_or_else(|e| panic!("blueprint {path}: {e}"))
 }
 
 /// A simulation run.

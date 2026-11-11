@@ -184,3 +184,16 @@ visible and can be filtered or re-run.
 | S6 | Blueprints for Indian Poker and 3-2-1 Drop; HU Hold'em abstraction | Indian Poker blueprint beats ISMCTS:7 with CI; HUNL training checkpoints |
 
 S1–S3 start right after the stack merge (M9) using Hold'em and FTQ, and grow as game families land.
+
+**Status (2026-11-11): S1–S6 built.**
+- S1/S2: `dc campaign plan|run|status|pause|resume|report` (`crates/cli/src/campaign.rs`), frozen binary
+  `<data_root>/bin/dc-<sha>.exe`, chunked resume, one offline HTML report per campaign.
+- S3: `config/campaigns/balance-v1.toml` covers every game (`games = ["all"]`); `balance-ismcts.toml` uses
+  low-budget ISMCTS for realism.
+- S4: `ladder-v1.toml`; ratings by weighted least squares (`campaign::ladder_fit`), reported per game so
+  FR-BT-5 (same preset ≈ same strength everywhere) can be read across columns.
+- S5: strength-aware rollouts (backlog #1), study campaigns over `dc analyze`, spot grids.
+- S6: `blueprint-v1.toml`; MCCFR checkpoints (`Mccfr::checkpoint/restore`); Indian Poker with exact
+  exploitability; 3-2-1 Drop vs ISMCTS; heads-up Hold'em through `games::holdem_abstract` (8 strength buckets
+  per street, pot/all-in bets, ≤ 2 raises per street): ~150 k information sets per 20 k iterations, 12 MB
+  checkpoints, resumable. Measured (3 k iterations): Indian Poker exploitability 1.33 → 0.64 per hand.

@@ -18,6 +18,7 @@ pub mod blueprint;
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use smallvec::SmallVec;
 
 use engine::game::sample_weighted;
@@ -25,6 +26,8 @@ use engine::{Chips, DetRng, Game, HandSetup, Seat, ToAct};
 
 use crate::strategy::{Probs, regret_matching};
 pub use blueprint::{Blueprint, BlueprintPolicy};
+
+const CHECKPOINT_TAG: u32 = 0x4D43_4346; // "MCCF"
 
 /// Training options.
 #[derive(Clone, Debug)]
@@ -50,7 +53,7 @@ impl Default for MccfrConfig {
 }
 
 /// Per-information-set data.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct InfoSet<A> {
     actions: SmallVec<[A; 8]>,
     regret: Probs,
@@ -181,6 +184,34 @@ impl<G: Game> Mccfr<G> {
         }
     }
 
+    /// Everything needed to continue training later (regrets and strategy sums), as bytes.
+    /// Long trainings (heads-up Hold'em) save one after every step and resume from it.
+    pub fn checkpoint(&self) -> Vec<u8>
+    where
+        G::Observation: Serialize,
+    {
+        let rows: Vec<(&G::Observation, &InfoSet<G::Action>)> = self.table.iter().collect();
+        postcard::to_allocvec(&(CHECKPOINT_TAG, self.iterations, rows))
+            .expect("checkpoint serializes")
+    }
+
+    /// Continue from [`Mccfr::checkpoint`] bytes.
+    pub fn restore(config: MccfrConfig, bytes: &[u8]) -> Result<Mccfr<G>, String>
+    where
+        G::Observation: DeserializeOwned,
+    {
+        let (tag, iterations, rows): (u32, u64, Vec<(G::Observation, InfoSet<G::Action>)>) =
+            postcard::from_bytes(bytes).map_err(|e| format!("bad checkpoint: {e}"))?;
+        if tag != CHECKPOINT_TAG {
+            return Err("not an MCCFR checkpoint".into());
+        }
+        Ok(Mccfr {
+            config,
+            table: rows.into_iter().collect(),
+            iterations,
+        })
+    }
+
     /// The average strategy so far: the part that converges to equilibrium.
     pub fn blueprint(&self, game: &G) -> Blueprint<G> {
         let mut bp = Blueprint::new(game.meta().id, game.meta().version, self.iterations);
@@ -208,6 +239,26 @@ mod tests {
     use engine::rng::rng_from_seed;
     use games::kuhn::{self, Kuhn};
     use games::leduc::{self, Leduc};
+
+    #[test]
+    fn checkpoint_resumes_exactly() {
+        let game = Kuhn::new(kuhn::Config {});
+        let mut a = Mccfr::<Kuhn>::new(MccfrConfig::default());
+        let mut rng = rng_from_seed(9);
+        a.train(&game, 2_000, &mut rng);
+        let mut b = Mccfr::<Kuhn>::restore(MccfrConfig::default(), &a.checkpoint()).unwrap();
+        assert_eq!(b.iterations(), 2_000);
+        assert_eq!(b.info_sets(), a.info_sets());
+        let mut ra = rng_from_seed(10);
+        let mut rb = rng_from_seed(10);
+        a.train(&game, 1_000, &mut ra);
+        b.train(&game, 1_000, &mut rb);
+        assert_eq!(
+            exploitability(&game, &a.blueprint(&game)),
+            exploitability(&game, &b.blueprint(&game)),
+            "a restored trainer continues exactly"
+        );
+    }
 
     /// NFR-2: MCCFR on Kuhn converges to (near) equilibrium.
     #[test]

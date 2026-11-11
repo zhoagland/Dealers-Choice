@@ -89,6 +89,10 @@ pub fn with_game<R>(
         "holdem_nl" => Ok(visitor.visit(Holdem::new(parse_config(id, config)?))),
         "ftq" => Ok(visitor.visit(FollowTheQueen::new(parse_config(id, config)?))),
         "blackjack" => Ok(visitor.visit(Blackjack::new(parse_config(id, config)?))),
+        // Training only (blueprints): not listed in GAME_IDS, so it's never offered to play.
+        "holdem_hu_abstract" => Ok(visitor.visit(crate::holdem_abstract::AbstractHoldem::new(
+            parse_config(id, config)?,
+        ))),
         id if SCRIPTED_IDS.contains(&id) => {
             let mut c: script::Config = parse_config(id, config)?;
             c.game = id.to_string();

@@ -254,8 +254,10 @@ fn play_deal<G: Game>(
     for r in 0..rotations {
         // seating[s] = which bot sits in seat s for this rotation.
         let seating: Vec<usize> = (0..n).map(|s| (s + r) % n).collect();
-        let mut policies: Vec<Box<dyn Policy<G>>> =
-            seating.iter().map(|&b| spec.bots[b].build::<G>()).collect();
+        let mut policies: Vec<Box<dyn Policy<G>>> = seating
+            .iter()
+            .map(|&b| spec.bots[b].build::<G>(game))
+            .collect();
         let mut seats: Vec<&mut dyn Policy<G>> = policies
             .iter_mut()
             .map(|p| p.as_mut() as &mut dyn Policy<G>)
