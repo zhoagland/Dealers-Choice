@@ -58,7 +58,7 @@ label.check { display: flex; gap: 8px; align-items: center; }
 .toggle { display: inline-flex; gap: 4px; align-items: center; margin: 0; font-size: 0.85em; }
 .card-panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin: 12px 0; }
 .badge { font-size: 0.7em; padding: 1px 6px; border-radius: 8px; background: #2d4a3f; text-transform: lowercase; }
-.badge.dealer { background: var(--ink); color: #111; font-weight: 700; }
+.badge.dealer { background: var(--ink); color: #111; font-weight: 700; text-transform: none; }
 .badge.away { background: #5c4a1d; }
 .avatar { width: 26px; height: 26px; border-radius: 50%; background: var(--line); display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.8em; flex: none; }
 
@@ -143,6 +143,8 @@ main { padding: 8px 16px 24px; max-width: 1200px; margin: 0 auto; }
   border-radius: 14px; padding: 10px; display: flex; flex-direction: column; gap: 8px;
   padding-bottom: calc(10px + env(safe-area-inset-bottom));
 }
+/* The game picker is long: let it scroll with the page instead of covering the seats. */
+.action-bar.picking { position: static; }
 .prompt-title { display: flex; justify-content: space-between; }
 .timer { font-variant-numeric: tabular-nums; color: var(--accent); }
 .timer.bank { color: var(--loss); }

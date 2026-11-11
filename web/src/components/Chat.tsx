@@ -15,7 +15,11 @@ export function Chat({
 }) {
   const [text, setText] = useState("");
   const end = useRef<HTMLLIElement>(null);
-  useEffect(() => end.current?.scrollIntoView({ block: "nearest" }), [lines.length]);
+  // Braces matter: newer browsers return a Promise from scrollIntoView, and React would
+  // treat a returned value as the effect's cleanup.
+  useEffect(() => {
+    end.current?.scrollIntoView({ block: "nearest" });
+  }, [lines.length]);
   return (
     <div className="chat">
       <ul className="chat-lines" aria-live="polite">

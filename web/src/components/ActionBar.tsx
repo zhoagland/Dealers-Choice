@@ -22,7 +22,9 @@ type AmountOpt = Extract<PromptOption, { kind: "Amount" }>;
 
 function AmountPicker({ opt, onChoose }: { opt: AmountOpt; onChoose: (c: Choice) => void }) {
   const [cents, setCents] = useState(opt.presets[0]?.cents ?? opt.min);
-  useEffect(() => setCents(opt.presets[0]?.cents ?? opt.min), [opt]);
+  useEffect(() => {
+    setCents(opt.presets[0]?.cents ?? opt.min);
+  }, [opt]);
   const free = opt.step > 0;
   return (
     <div className="amount">
@@ -133,7 +135,7 @@ export function ActionBar({
   const amounts = prompt.options.filter((o): o is AmountOpt => o.kind === "Amount");
   const gameOpts = prompt.options.filter((o): o is GameOpt => o.kind === "Game");
   return (
-    <div className="action-bar" role="region" aria-label="Your decision">
+    <div className={`action-bar${gameOpts.length > 0 ? " picking" : ""}`} role="region" aria-label="Your decision">
       <div className="prompt-title">
         <strong>{prompt.title}</strong> <Countdown deadline={prompt.deadline_ms} bank={prompt.bank_ms} />
       </div>
