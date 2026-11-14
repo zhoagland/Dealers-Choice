@@ -40,7 +40,8 @@ function place(b: BoardView): Map<number, Pos> | null {
   return at;
 }
 
-export function Board({ board, wild }: { board: BoardView; wild: readonly number[] }) {
+export function Board({ board, wild, dealKey }: { board: BoardView; wild: readonly number[]; dealKey?: string }) {
+  const dk = (i: number) => (dealKey && board.slots[i] !== "Empty" ? `${dealKey}-${i}` : undefined);
   if (board.layout === "Wheel") {
     const n = board.slots.length;
     return (
@@ -53,6 +54,7 @@ export function Board({ board, wild }: { board: BoardView; wild: readonly number
               <span
                 key={i}
                 className="ring-slot"
+                data-deal-key={dk(i)}
                 style={{ left: `${50 + 40 * Math.cos(a)}%`, top: `${50 + 40 * Math.sin(a)}%` }}
               >
                 <CardView slot={slot} size="sm" wild={wild} />
@@ -70,7 +72,9 @@ export function Board({ board, wild }: { board: BoardView; wild: readonly number
         <figcaption>{board.name}</figcaption>
         <div className="cards">
           {board.slots.map((slot, i) => (
-            <CardView key={i} slot={slot} wild={wild} />
+            <span key={i} data-deal-key={dk(i)}>
+              <CardView slot={slot} wild={wild} />
+            </span>
           ))}
         </div>
       </figure>
@@ -83,7 +87,7 @@ export function Board({ board, wild }: { board: BoardView; wild: readonly number
         {board.slots.map((slot, i) => {
           const p = grid.get(i)!;
           return (
-            <span key={i} style={{ gridRow: p.r + 1, gridColumn: p.c + 1 }}>
+            <span key={i} data-deal-key={dk(i)} style={{ gridRow: p.r + 1, gridColumn: p.c + 1 }}>
               <CardView slot={slot} size="sm" wild={wild} />
             </span>
           );

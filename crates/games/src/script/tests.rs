@@ -1059,3 +1059,35 @@ fn typed_raises_parse_in_spread_limit() {
         c += Chips(50);
     }
 }
+
+#[test]
+fn indian_folder_sees_own_card() {
+    let g = game("indian_poker");
+    let mut s = g.new_hand(&HandSetup::simple(3, Chips(10_000)));
+    drive(&g, &mut s, |s| matches!(g.to_act(s), ToAct::Seat(_)));
+    // The first seat bets so the next one can fold.
+    let mut legal = Vec::new();
+    g.legal_actions(&s, &mut legal);
+    let bet = *legal
+        .iter()
+        .find(|a| matches!(a, Action::RaiseTo(_)))
+        .unwrap();
+    g.apply(&mut s, bet);
+    let ToAct::Seat(p) = g.to_act(&s) else {
+        unreachable!()
+    };
+    assert!(
+        g.observe(&s, p).own_shown.is_none(),
+        "hidden before folding"
+    );
+    g.apply(&mut s, Action::Fold);
+    let own = g.observe(&s, p).own_shown.expect("shown after folding");
+    assert_eq!(own.as_slice(), s.down[p.index()].as_slice());
+    let v = g.view(&g.observe(&s, p));
+    assert!(
+        v.seats[p.index()]
+            .cards
+            .iter()
+            .all(|c| matches!(c, engine::view::CardSlot::Up(_)))
+    );
+}

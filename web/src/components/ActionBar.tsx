@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { money } from "../cards";
+import type { Picker } from "../pick";
 import type { Choice, GameInfo, Prompt, PromptOption } from "../protocol";
 
 function Countdown({ deadline, bank }: { deadline: number; bank: number }) {
@@ -13,48 +14,58 @@ function Countdown({ deadline, bank }: { deadline: number; bank: number }) {
   const inBank = turn === 0;
   return (
     <span className={`timer${inBank ? " bank" : ""}`} role="timer" aria-live="off">
-      {inBank ? `time bank ${Math.ceil(left / 1000)}s` : `${Math.ceil(turn / 1000)}s`}
+      {inBank ? `Time bank ${Math.ceil(left / 1000)}s` : `${Math.ceil(turn / 1000)}s`}
     </span>
   );
 }
 
 type AmountOpt = Extract<PromptOption, { kind: "Amount" }>;
 
-function AmountPicker({ opt, onChoose }: { opt: AmountOpt; onChoose: (c: Choice) => void }) {
-  const [cents, setCents] = useState(opt.presets[0]?.cents ?? opt.min);
+/**
+ * Bet or raise: when any amount in steps is allowed, − / + buttons and a slider (50¢ steps in
+ * spread-limit games, playtest P1-13); otherwise one button per allowed amount.
+ */
+function AmountPicker({ opt, onChoose, facingBet }: { opt: AmountOpt; onChoose: (c: Choice) => void; facingBet: boolean }) {
+  const [cents, setCents] = useState(opt.min);
   useEffect(() => {
-    setCents(opt.presets[0]?.cents ?? opt.min);
+    setCents(opt.min);
   }, [opt]);
-  const free = opt.step > 0;
-  return (
-    <div className="amount">
+  const free = opt.step > 0 && opt.max > opt.min;
+  const raise = facingBet ? "Raise to" : "Bet";
+  if (!free) {
+    return (
       <div className="presets">
         {opt.presets.map((p) => (
-          <button
-            key={p.label + p.cents}
-            className={`btn bet${p.cents === cents ? " selected" : ""}`}
-            onClick={() => (free ? setCents(p.cents) : onChoose({ kind: "Amount", id: opt.id, cents: p.cents }))}
-          >
+          <button key={p.label + p.cents} className="btn bet" onClick={() => onChoose({ kind: "Amount", id: opt.id, cents: p.cents })}>
             {p.label}
           </button>
         ))}
       </div>
-      {free && (
-        <div className="slider">
-          <input
-            type="range"
-            min={opt.min}
-            max={opt.max}
-            step={opt.step}
-            value={cents}
-            aria-label={opt.label}
-            onChange={(e) => setCents(Number(e.target.value))}
-          />
-          <button className="btn bet primary" onClick={() => onChoose({ kind: "Amount", id: opt.id, cents })}>
-            {opt.label} {money(cents)}
-          </button>
-        </div>
-      )}
+    );
+  }
+  const clamp = (c: number) => Math.min(opt.max, Math.max(opt.min, c));
+  return (
+    <div className="amount">
+      <div className="stepper-row">
+        <button className="btn step" aria-label="less" disabled={cents <= opt.min} onClick={() => setCents(clamp(cents - opt.step))}>
+          −
+        </button>
+        <input
+          type="range"
+          min={opt.min}
+          max={opt.max}
+          step={opt.step}
+          value={cents}
+          aria-label={opt.label}
+          onChange={(e) => setCents(Number(e.target.value))}
+        />
+        <button className="btn step" aria-label="more" disabled={cents >= opt.max} onClick={() => setCents(clamp(cents + opt.step))}>
+          +
+        </button>
+      </div>
+      <button className="btn bet big" onClick={() => onChoose({ kind: "Amount", id: opt.id, cents })}>
+        {raise} {money(cents)}
+      </button>
     </div>
   );
 }
@@ -107,7 +118,7 @@ function GamePicker({
                       aria-expanded={open === g.id}
                       onClick={() => setOpen(open === g.id ? null : g.id)}
                     >
-                      rules
+                      Rules
                     </button>
                   )}
                 </div>
@@ -126,12 +137,17 @@ export function ActionBar({
   prompt,
   games,
   onChoose,
+  picker,
 }: {
   prompt: Prompt;
   games: Map<string, GameInfo>;
   onChoose: (c: Choice) => void;
+  /** When the decision is made by clicking cards, its state (the card buttons aren't shown). */
+  picker?: Picker | null;
 }) {
-  const buttons = prompt.options.filter((o): o is Extract<PromptOption, { kind: "Button" }> => o.kind === "Button");
+  const buttons = prompt.options.filter(
+    (o): o is Extract<PromptOption, { kind: "Button" }> => o.kind === "Button" && !(picker && o.cards),
+  );
   const amounts = prompt.options.filter((o): o is AmountOpt => o.kind === "Amount");
   const gameOpts = prompt.options.filter((o): o is GameOpt => o.kind === "Game");
   return (
@@ -140,6 +156,23 @@ export function ActionBar({
         <strong>{prompt.title}</strong> <Countdown deadline={prompt.deadline_ms} bank={prompt.bank_ms} />
       </div>
       {gameOpts.length > 0 && <GamePicker games={gameOpts} info={games} onChoose={onChoose} />}
+      {picker && (
+        <div className="pick-bar">
+          <span className="pick-hint">{picker.match && picker.mode !== "Select" ? "Ready!" : picker.hint}</span>
+          {picker.mode !== "Play" && (
+            <>
+              {picker.sel.length > 0 && (
+                <button className="btn" onClick={picker.clear}>
+                  Clear
+                </button>
+              )}
+              <button className="btn primary big" disabled={!picker.match} onClick={picker.submit}>
+                {picker.match ? picker.confirm : picker.mode === "Select" ? "Pick cards" : picker.confirm}
+              </button>
+            </>
+          )}
+        </div>
+      )}
       {buttons.length > 0 && (
         <div className="buttons">
           {buttons.map((b) => (
@@ -150,7 +183,7 @@ export function ActionBar({
         </div>
       )}
       {amounts.map((a) => (
-        <AmountPicker key={a.id} opt={a} onChoose={onChoose} />
+        <AmountPicker key={a.id} opt={a} onChoose={onChoose} facingBet={buttons.some((b) => b.class === "call")} />
       ))}
     </div>
   );
