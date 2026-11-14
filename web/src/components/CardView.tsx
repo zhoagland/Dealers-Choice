@@ -11,7 +11,7 @@ export function rankIndex(name: string): number {
 
 interface Props {
   slot: CardSlot;
-  size?: "sm" | "md" | "lg";
+  size?: "sm" | "md" | "lg" | "xl";
   /** Rank indices that are wild for this card's owner. */
   wild?: readonly number[];
 }

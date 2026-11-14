@@ -44,3 +44,8 @@ export function money(cents: Cents): string {
   const rest = a % 100;
   return `${sign}$${dollars.toLocaleString()}${rest ? "." + String(rest).padStart(2, "0") : ""}`;
 }
+
+/** "chooser" → "Chooser" (labels from the server are lower case mid-sentence). */
+export function capFirst(s: string): string {
+  return s ? s[0].toUpperCase() + s.slice(1) : s;
+}

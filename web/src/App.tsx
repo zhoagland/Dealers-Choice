@@ -1,7 +1,9 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { api, HttpError } from "./api";
 import { money } from "./cards";
+import { PrefsMenu } from "./components/PrefsMenu";
 import { HandList, ReplayView } from "./components/Replay";
+import { startPrefs } from "./prefs";
 import { inDiscord, startActivity } from "./discord";
 import { Admin } from "./pages/Admin";
 import { Lobby } from "./pages/Lobby";
@@ -12,25 +14,6 @@ import type { HandListing, Me, ServerConfig } from "./protocol";
 const Gallery = import.meta.env.DEV
   ? lazy(() => import("./pages/Gallery").then((m) => ({ default: m.Gallery })))
   : () => null;
-
-function useFourColor(): [boolean, (v: boolean) => void] {
-  const [on, setOn] = useState(() => {
-    try {
-      return localStorage.getItem("fourColor") === "1";
-    } catch {
-      return false;
-    }
-  });
-  useEffect(() => {
-    document.body.classList.toggle("four-color", on);
-    try {
-      localStorage.setItem("fourColor", on ? "1" : "0");
-    } catch {
-      /* private mode */
-    }
-  }, [on]);
-  return [on, setOn];
-}
 
 /** Hash routes keep every URL relative, which Discord's Activity proxy needs (web.md §13). */
 function useRoute(): string {
@@ -92,7 +75,8 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [activityTable, setActivityTable] = useState<string | null>(null);
   const embedded = inDiscord();
-  const [fourColor, setFourColor] = useFourColor();
+
+  useEffect(() => startPrefs(), []);
 
   useEffect(() => {
     if (import.meta.env.DEV && route === "/dev/views") return;
@@ -148,15 +132,13 @@ export function App() {
           <span className="me">
             {me.name} · {money(me.bankroll)}
           </span>
-          <label className="toggle" title="Four-colour deck: clubs green, diamonds blue">
-            <input type="checkbox" checked={fourColor} onChange={(e) => setFourColor(e.target.checked)} /> 4-colour
-          </label>
+          <PrefsMenu />
           <button className="link" onClick={() => void api.logout().then(() => window.location.reload())}>
             Sign out
           </button>
         </header>
       )}
-      <main>{page}</main>
+      <main className={table ? "full" : ""}>{page}</main>
     </div>
   );
 }

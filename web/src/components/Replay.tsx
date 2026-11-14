@@ -72,7 +72,7 @@ export function ReplayView({ id, onClose }: { id: number; onClose: () => void })
       </div>
       <TableRenderer view={s.view} labels={(seat) => ({ name: replay.names[seat] ?? `Seat ${seat + 1}` })} />
       <button className="link" onClick={() => setShowText(!showText)}>
-        {showText ? "hide" : "show"} text
+        {showText ? "Hide" : "Show"} text
       </button>
       {showText && (
         <>

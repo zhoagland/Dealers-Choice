@@ -1,4 +1,4 @@
-import { money } from "../cards";
+import { capFirst, money } from "../cards";
 import type { SeatView, TableView } from "../protocol";
 import { Board } from "./Board";
 import { CardView, rankIndex } from "./CardView";
@@ -9,7 +9,7 @@ export interface SeatLabel {
   connected?: boolean;
 }
 
-const STATUS: Record<string, string> = { Folded: "folded", AllIn: "all in", Out: "out" };
+const STATUS: Record<string, string> = { Folded: "Folded", AllIn: "All in", Out: "Out" };
 
 function wildFor(view: TableView, seat: number): number[] {
   return view.wilds
@@ -50,11 +50,11 @@ function SeatBox({
         )}
         {s.badges.map((b) => (
           <span key={b} className="badge">
-            {b}
+            {capFirst(b)}
           </span>
         ))}
-        {label.away && <span className="badge away">away</span>}
-        {label.connected === false && <span className="badge away">offline</span>}
+        {label.away && <span className="badge away">Away</span>}
+        {label.connected === false && <span className="badge away">Offline</span>}
       </header>
       <div className="cards">
         {s.cards.map((c, i) => (
@@ -63,7 +63,7 @@ function SeatBox({
       </div>
       <footer>
         <span className="stack">{money(s.stack)}</span>
-        {s.bet > 0 && <span className="bet">bet {money(s.bet)}</span>}
+        {s.bet > 0 && <span className="bet">Bet {money(s.bet)}</span>}
         {STATUS[s.status] && <span className="status">{STATUS[s.status]}</span>}
       </footer>
     </section>
