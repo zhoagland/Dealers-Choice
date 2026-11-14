@@ -11,7 +11,8 @@
 use serde::{Deserialize, Serialize};
 
 pub use engine::view::{
-    BoardLayout, BoardView, CardSlot, PotView, SeatStatus, SeatView, TableView, WildView,
+    BoardLayout, BoardView, CardPick, CardSlot, PickMode, PotView, SeatStatus, SeatView, TableView,
+    WildView,
 };
 
 /// Browser → server, over the table WebSocket.
@@ -107,6 +108,9 @@ pub enum PromptOption {
         label: String,
         /// "fold", "check", "call", "bet", "declare", "cards", "other".
         class: String,
+        /// The viewer's cards this option uses, so the player can pick it by clicking cards.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cards: Option<CardPick>,
     },
     /// Bet or raise to any amount in `min..=max` (cents), in `step`s.
     Amount {
@@ -153,6 +157,9 @@ pub struct TableInfo {
     pub log: Vec<String>,
     /// The table seat of each hand seat in the current hand (`TableView` seats are hand seats).
     pub hand_seats: Vec<u8>,
+    /// During the break between games: when the next game starts (Unix ms).
+    #[serde(default)]
+    pub next_game_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -181,8 +188,11 @@ pub struct HandSummary {
     pub hand_id: i64,
     pub game: String,
     pub results: Vec<SeatResult>,
-    /// The hand as the viewer saw it at the end (text, as the CLI prints).
+    /// The hand as the viewer saw it at the end (text, as the CLI prints); empty for watchers.
     pub text: String,
+    /// More than one hand was still in at the end, so cards were shown.
+    #[serde(default)]
+    pub showdown: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -306,6 +316,9 @@ mod tests {
             CardSlot::Empty,
         ];
         s.badges = vec!["chooser".into()];
+        s.played = vec!["Qs".parse().unwrap()];
+        s.groups = vec![2, 2];
+        s.tricks = Some(1);
         TableView {
             game: "Follow the Queen".into(),
             phase: "Declare".into(),
@@ -357,6 +370,7 @@ mod tests {
             hand_no: 3,
             log: vec!["Ann chose Follow the Queen".into()],
             hand_seats: vec![0],
+            next_game_ms: Some(1),
         }
     }
 
@@ -371,6 +385,16 @@ mod tests {
                     id: "0".into(),
                     label: "Fold".into(),
                     class: "fold".into(),
+                    cards: None,
+                },
+                PromptOption::Button {
+                    id: "1".into(),
+                    label: "Throw away cards 1,2".into(),
+                    class: "cards".into(),
+                    cards: Some(CardPick {
+                        mode: PickMode::Select,
+                        positions: vec![0, 1],
+                    }),
                 },
                 PromptOption::Amount {
                     id: "raise".into(),
@@ -428,6 +452,7 @@ mod tests {
                         cents: 200,
                     }],
                     text: "…".into(),
+                    showdown: true,
                 },
             },
             ServerMsg::Chat {

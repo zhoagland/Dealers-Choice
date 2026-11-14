@@ -23,6 +23,20 @@ export interface SeatView {
   status: SeatStatus;
   cards: readonly CardSlot[];
   badges: readonly string[];
+  /** Cards put in front of the seat this round (a trick), in play order. */
+  played: readonly Card[];
+  /** How `cards` split into groups (sizes in order), e.g. [2, 2, 2]; empty = one group. */
+  groups: readonly number[];
+  /** Tricks taken this hand (trick-taking games). */
+  tricks: number | null;
+}
+
+export type PickMode = "Select" | "Pairs" | "Sequence" | "Play";
+
+/** Which of the viewer's cards (indices into their seat's `cards`) an option uses. */
+export interface CardPick {
+  mode: PickMode;
+  positions: readonly number[];
 }
 
 export interface BoardView {
@@ -80,7 +94,7 @@ export interface Preset {
 }
 
 export type PromptOption =
-  | { kind: "Button"; id: string; label: string; class: string }
+  | { kind: "Button"; id: string; label: string; class: string; cards?: CardPick }
   | {
       kind: "Amount";
       id: string;
@@ -130,6 +144,8 @@ export interface TableInfo {
   log: readonly string[];
   /** The table seat of each hand seat in the current hand (TableView seats are hand seats). */
   hand_seats: readonly number[];
+  /** During the break between games: when the next game starts (Unix ms). */
+  next_game_ms: number | null;
 }
 
 export interface ChatLine {
@@ -148,7 +164,10 @@ export interface HandSummary {
   hand_id: number;
   game: string;
   results: readonly SeatResult[];
+  /** The hand as the viewer saw it; empty for watchers. */
   text: string;
+  /** Cards were shown (more than one hand reached the end). */
+  showdown: boolean;
 }
 
 export type ServerMsg =

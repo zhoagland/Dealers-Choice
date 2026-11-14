@@ -1566,6 +1566,8 @@ fn tempest() -> Script {
 ///   the other.
 /// - **D-727-2** "Both" follows the house Both rule.
 /// - **D-727-3** at most 10 hit rounds.
+/// - **D-727-4 (owner, playtest P1-23)** each hit round, and the betting after it, starts one seat
+///   further left than the one before.
 /// - Variation `bluff_bust` (the Bible's): a busted hand can still win a target nobody else
 ///   declared.
 fn targets(
@@ -1655,7 +1657,8 @@ fn numbers() -> Script {
 // ----- G10 Trick-taking -----------------------------------------------------------------------
 
 /// Whooh Ray for Booray: 5 cards (the dealer's last one face up: its suit is trump); In or Out;
-/// one draw; then 5 tricks led by the dealer (follow suit; highest trump, else highest of the led
+/// one draw; then 5 tricks, the first led by the player left of the dealer (owner, playtest
+/// P1-24), later ones by the last trick's winner (follow suit; highest trump, else highest of the led
 /// suit, ace high, wins). 3 tricks scoop the pot; a player who played and took no trick "fries"
 /// (a stun); every other player who played pays $1. The game repeats (button moving) until someone
 /// scoops and nobody fries.

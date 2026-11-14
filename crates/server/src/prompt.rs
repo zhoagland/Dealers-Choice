@@ -43,13 +43,14 @@ pub fn build<G: Game>(game: &G, s: &G::State, legal: &[G::Action]) -> Built<G::A
                     }
                     ActionClass::CheckOrCall { .. } => "Check".to_string(),
                     ActionClass::Fold => "Fold".to_string(),
-                    _ => capitalize(&game.describe_action(a)),
+                    _ => capitalize(&game.describe_action_in(s, a)),
                 };
                 let id = format!("a{i}");
                 options.push(PromptOption::Button {
                     id: id.clone(),
                     label,
                     class: class_name(c).into(),
+                    cards: game.action_cards(s, a),
                 });
                 buttons.push((id, a));
             }
@@ -130,7 +131,7 @@ pub fn public_label<G: Game>(game: &G, s: &G::State, a: G::Action) -> String {
     match game.classify(s, a) {
         ActionClass::CardChoice => "chooses cards".into(),
         ActionClass::Declare => "declares".into(),
-        _ => game.describe_action(a),
+        _ => game.describe_action_in(s, a),
     }
 }
 
