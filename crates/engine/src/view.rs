@@ -43,6 +43,16 @@ pub struct SeatView {
     pub cards: Vec<CardSlot>,
     /// Small labels: `"declared"`, `"chooser"`, `"2 legs"`, `"wild: 7"`.
     pub badges: Vec<String>,
+    /// Cards this seat has put in front of it in the current round (a trick), in play order.
+    #[serde(default)]
+    pub played: Vec<Card>,
+    /// How `cards` split into groups (sizes in order), e.g. `[2, 2, 2]` for three pairs. Empty =
+    /// one group.
+    #[serde(default)]
+    pub groups: Vec<u8>,
+    /// Tricks taken this hand (trick-taking games only).
+    #[serde(default)]
+    pub tricks: Option<u8>,
 }
 
 impl SeatView {
@@ -55,8 +65,31 @@ impl SeatView {
             status: SeatStatus::Active,
             cards: Vec::new(),
             badges: Vec::new(),
+            played: Vec::new(),
+            groups: Vec::new(),
+            tricks: None,
         }
     }
+}
+
+/// Which of the acting seat's cards an action uses, so a UI can let the player pick cards
+/// instead of a button. Positions index the seat's [`SeatView::cards`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CardPick {
+    pub mode: PickMode,
+    pub positions: Vec<u8>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PickMode {
+    /// A set of cards (throw away, pass); order doesn't matter. May be empty (stand pat).
+    Select,
+    /// Cards in pairs: positions `(0,1)`, `(2,3)`, … form the pairs; pair order doesn't matter.
+    Pairs,
+    /// Every card in an order (reveal order): `positions[0]` goes first.
+    Sequence,
+    /// One card to play.
+    Play,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

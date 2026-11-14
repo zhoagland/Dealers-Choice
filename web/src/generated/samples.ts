@@ -77,7 +77,15 @@ export const server = [
           ],
           "badges": [
             "chooser"
-          ]
+          ],
+          "played": [
+            58
+          ],
+          "groups": [
+            2,
+            2
+          ],
+          "tricks": 1
         }
       ],
       "boards": [
@@ -125,6 +133,19 @@ export const server = [
           "id": "0",
           "label": "Fold",
           "class": "fold"
+        },
+        {
+          "kind": "Button",
+          "id": "1",
+          "label": "Throw away cards 1,2",
+          "class": "cards",
+          "cards": {
+            "mode": "Select",
+            "positions": [
+              0,
+              1
+            ]
+          }
         },
         {
           "kind": "Amount",
@@ -181,7 +202,8 @@ export const server = [
       ],
       "hand_seats": [
         0
-      ]
+      ],
+      "next_game_ms": 1
     }
   },
   {
@@ -195,7 +217,8 @@ export const server = [
           "cents": 200
         }
       ],
-      "text": "…"
+      "text": "…",
+      "showdown": true
     }
   },
   {
@@ -321,9 +344,17 @@ const rest = {
                 },
                 "Empty"
               ],
+              "groups": [
+                2,
+                2
+              ],
+              "played": [
+                58
+              ],
               "seat": 0,
               "stack": 9800,
-              "status": "Active"
+              "status": "Active",
+              "tricks": 1
             }
           ],
           "to_act": 0,

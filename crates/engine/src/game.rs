@@ -427,6 +427,32 @@ pub trait Game: Send + Sync + Sized + 'static {
         format!("{a:?}")
     }
 
+    /// The label for `a` as an answer to the decision in `s` (e.g. "Hit" rather than "choose 1").
+    /// Default: [`Game::describe_action`].
+    fn describe_action_in(&self, _s: &Self::State, a: Self::Action) -> String {
+        self.describe_action(a)
+    }
+
+    /// Which of the acting seat's cards `a` uses, so a UI can offer card picking. Default: none.
+    fn action_cards(&self, _s: &Self::State, _a: Self::Action) -> Option<crate::view::CardPick> {
+        None
+    }
+
+    /// `Some(key)` when the seats now to act decide at the same time: each choice stays hidden
+    /// until everyone in the step has chosen, and doesn't change what the others may choose.
+    /// Every seat of one such step returns the same key. A table may then ask them all at once
+    /// and apply the answers in turn order. Default: never.
+    fn simultaneous(&self, _s: &Self::State) -> Option<u32> {
+        None
+    }
+
+    /// Called on the terminal state of a hand that ended the game: `Some(seat)` when the next
+    /// game's deal goes to the seat left of `seat` instead of left of this game's chooser (e.g.
+    /// Scare-a-moosh: left of the declarer who won). Default: none.
+    fn next_deal_after(&self, _s: &Self::State) -> Option<Seat> {
+        None
+    }
+
     /// Parse free-form human input (e.g. `"r 6.50"`) into an action; `legal` is the bot menu
     /// for context. Return `None` if the text isn't understood. Default: understands nothing,
     /// so humans pick from the numbered menu.
