@@ -923,18 +923,19 @@ fn booray_follow_suit_trump_and_scoring() {
     g.apply(&mut s, Action::InOut(1));
     g.apply(&mut s, Action::Draw(0));
     g.apply(&mut s, Action::Draw(0));
-    // The dealer (s0) leads and may not lead trump before it's played: only 2d.
+    // The seat left of the dealer (s1) leads the first trick (P1-24): any of its clubs.
     let mut legal = Vec::new();
     g.legal_actions(&s, &mut legal);
-    assert_eq!(legal, vec![Action::PlayCard(card("2d"))]);
-    g.apply(&mut s, Action::PlayCard(card("2d")));
-    // s1 has no diamonds: any card.
-    g.legal_actions(&s, &mut legal);
+    assert_eq!(g.to_act(&s), ToAct::Seat(Seat(1)));
     assert_eq!(legal.len(), 5);
     g.apply(&mut s, Action::PlayCard(card("6c")));
-    // s0 won (the only diamond); s0 leads again, now any card (still no trump played: hearts
-    // only left, so trump may be led).
+    // s0 has no clubs: any card. It trumps with the Jack.
+    g.legal_actions(&s, &mut legal);
+    assert_eq!(legal.len(), 5);
+    g.apply(&mut s, Action::PlayCard(card("Jh")));
+    // s0 won with trump and leads the rest (trump has been played, so hearts may be led).
     assert_eq!(s.tricks_won, vec![1, 0]);
+    assert_eq!(g.to_act(&s), ToAct::Seat(Seat(0)));
     for _ in 0..4 {
         g.legal_actions(&s, &mut legal);
         g.apply(&mut s, legal[0]);
@@ -962,4 +963,131 @@ fn booray_lone_player_scoops() {
     assert!(c.over);
     // Pot: $2 dealer ante (s0) + $1 + $1 antes = $4 to s1.
     assert_eq!(g.payoffs(&s), vec![Chips(-300), Chips(300)]);
+}
+
+/// Plays with chance from a fixed seed, `pick` choosing each seat's action, until `stop`.
+fn drive(g: &Scripted, s: &mut State, mut stop: impl FnMut(&State) -> bool) {
+    let mut rng = engine::rng::rng_from_seed(3);
+    let mut legal = Vec::new();
+    while !stop(s) {
+        match g.to_act(s) {
+            ToAct::Terminal => return,
+            ToAct::Chance => {
+                let x = g.sample_chance(s, &mut rng);
+                g.apply(s, x);
+            }
+            ToAct::Seat(_) => {
+                g.legal_actions(s, &mut legal);
+                // Check/call, stand, else the first option.
+                let a = legal
+                    .iter()
+                    .copied()
+                    .find(|a| matches!(a, Action::CheckCall | Action::Choose(0)))
+                    .unwrap_or(legal[0]);
+                g.apply(s, a);
+            }
+        }
+    }
+}
+
+#[test]
+fn seven_27_labels_hit_and_stand_and_rotates_each_round() {
+    let g = game("seven_27");
+    let mut s = g.new_hand(&HandSetup::simple(3, Chips(10_000)));
+    // To the first hit-or-stand decision.
+    drive(&g, &mut s, |s| !s.prompts.is_empty());
+    let mut legal = Vec::new();
+    g.legal_actions(&s, &mut legal);
+    let labels: Vec<String> = legal.iter().map(|&a| g.describe_action_in(&s, a)).collect();
+    assert_eq!(labels, vec!["stand", "hit"]);
+    // Button s0 bet first from s1; the first hit round starts one further left (s2).
+    assert_eq!(g.to_act(&s), ToAct::Seat(Seat(2)));
+    // Everyone hits once: the betting after it starts at s2 too.
+    for _ in 0..3 {
+        g.apply(&mut s, Action::Choose(1));
+        drive(&g, &mut s, |s| !matches!(g.to_act(s), ToAct::Chance));
+    }
+    assert_eq!(g.view(&g.observe(&s, Seat(0))).phase, "Betting");
+    assert_eq!(g.to_act(&s), ToAct::Seat(Seat(2)));
+    // The second hit round starts at s0.
+    drive(&g, &mut s, |s| !s.prompts.is_empty());
+    assert_eq!(g.to_act(&s), ToAct::Seat(Seat(0)));
+}
+
+#[test]
+fn card_choices_name_their_cards() {
+    use engine::view::PickMode;
+    let g = game("mamas_favorite");
+    let mut s = g.new_hand(&HandSetup::simple(2, Chips(10_000)));
+    drive(&g, &mut s, |s| g.simultaneous(s).is_some());
+    let mut legal = Vec::new();
+    g.legal_actions(&s, &mut legal);
+    let pick = g.action_cards(&s, legal[0]).unwrap();
+    assert_eq!(pick.mode, PickMode::Pairs);
+    let mut sorted = pick.positions.clone();
+    sorted.sort();
+    assert_eq!(sorted, vec![0, 1, 2, 3, 4, 5]);
+}
+
+#[test]
+fn typed_raises_parse_in_spread_limit() {
+    let g = game("draw5");
+    let mut s = g.new_hand(&HandSetup::simple(2, Chips(10_000)));
+    drive(&g, &mut s, |s| {
+        let mut l = Vec::new();
+        g.legal_actions(s, &mut l);
+        l.iter().any(|a| matches!(a, Action::RaiseTo(_)))
+    });
+    let mut legal = Vec::new();
+    g.legal_actions(&s, &mut legal);
+    let raises: Vec<Chips> = legal
+        .iter()
+        .filter_map(|a| match a {
+            Action::RaiseTo(c) => Some(*c),
+            _ => None,
+        })
+        .collect();
+    let (lo, hi) = (raises[0], *raises.last().unwrap());
+    let mut c = lo;
+    while c <= hi {
+        let a = g.parse_action(
+            &format!("r {}", c.to_string().trim_start_matches('$')),
+            &legal,
+        );
+        assert_eq!(a, Some(Action::RaiseTo(c)));
+        assert!(g.validate(&s, a.unwrap()).is_ok(), "raise to {c}");
+        c += Chips(50);
+    }
+}
+
+#[test]
+fn indian_folder_sees_own_card() {
+    let g = game("indian_poker");
+    let mut s = g.new_hand(&HandSetup::simple(3, Chips(10_000)));
+    drive(&g, &mut s, |s| matches!(g.to_act(s), ToAct::Seat(_)));
+    // The first seat bets so the next one can fold.
+    let mut legal = Vec::new();
+    g.legal_actions(&s, &mut legal);
+    let bet = *legal
+        .iter()
+        .find(|a| matches!(a, Action::RaiseTo(_)))
+        .unwrap();
+    g.apply(&mut s, bet);
+    let ToAct::Seat(p) = g.to_act(&s) else {
+        unreachable!()
+    };
+    assert!(
+        g.observe(&s, p).own_shown.is_none(),
+        "hidden before folding"
+    );
+    g.apply(&mut s, Action::Fold);
+    let own = g.observe(&s, p).own_shown.expect("shown after folding");
+    assert_eq!(own.as_slice(), s.down[p.index()].as_slice());
+    let v = g.view(&g.observe(&s, p));
+    assert!(
+        v.seats[p.index()]
+            .cards
+            .iter()
+            .all(|c| matches!(c, engine::view::CardSlot::Up(_)))
+    );
 }

@@ -839,8 +839,9 @@ impl Scripted {
             Step::Tricks { n } => {
                 s.tricks_left = n;
                 s.trick.clear();
-                let lead = Self::trick_dealer(s).unwrap_or(s.setup.button);
-                s.pending = Self::order_from(s, lead).into();
+                // The seat left of the dealer leads the first trick (owner, playtest P1-24).
+                let dealer = Self::trick_dealer(s).unwrap_or(s.setup.button);
+                s.pending = Self::order_from(s, dealer.next(s.n())).into();
             }
         }
     }
@@ -910,15 +911,67 @@ impl Scripted {
         }
     }
 
-    /// 7/27: offer everyone still in a card.
+    /// 7/27: offer everyone still in a card, starting one seat further left each round.
     fn start_hit_round(&self, s: &mut State) {
         s.hit_any = false;
         s.hit_betting = false;
-        s.prompts = s
-            .live_from_left()
+        let first = Self::rotated(s, self.first_to_act(s), s.hit_rounds + 1);
+        s.prompts = Self::order_from(s, first)
             .into_iter()
             .map(|p| (p, Prompt::Take))
             .collect();
+    }
+
+    /// What the table is doing in `step`, for players (not the step's debug form).
+    fn phase_label(s: &State, step: Step) -> String {
+        match step {
+            Step::Down(_)
+            | Step::Up(_)
+            | Step::Board { .. }
+            | Step::Flip { .. }
+            | Step::FillPool { .. }
+            | Step::FlipPool { .. }
+            | Step::DummyIfLone { .. }
+            | Step::NumbersFlip
+            | Step::DealerUp => "Dealing".into(),
+            Step::Bet | Step::RedRiver { .. } => "Betting".into(),
+            Step::Declare => "Declare".into(),
+            Step::Draw { max, .. } => format!("Draw up to {max}"),
+            Step::Discard { n: 1, .. } => "Throw away a card".into(),
+            Step::Discard { n, pairs: true } => format!("Throw away a pair ({n} cards)"),
+            Step::Discard { n, .. } => format!("Throw away {n} cards"),
+            Step::PairUp => "Make your pairs".into(),
+            Step::ChooseDirection => "Choose the passing direction".into(),
+            Step::Pass(1) => "Pass a card".into(),
+            Step::Pass(n) => format!("Pass {n} cards"),
+            Step::InOut { .. } => "In or out?".into(),
+            Step::Order => "Order your cards".into(),
+            Step::Reveal => "Reveal".into(),
+            Step::Spit => "Spit a card".into(),
+            Step::UpOrDown => "Up or down?".into(),
+            Step::PushStreet => "Push or keep".into(),
+            Step::TakeRounds { .. } if s.take_betting => "Betting".into(),
+            Step::TakeRounds { .. } => "Take a card?".into(),
+            Step::BidRound { .. } => "Bidding".into(),
+            Step::BuyCard { .. } => "Buy a card?".into(),
+            Step::PlayRound { .. } => "Play or drop?".into(),
+            Step::NameGame { .. } => "Name the game".into(),
+            Step::HitRounds { .. } if s.hit_betting => "Betting".into(),
+            Step::HitRounds { .. } => "Hit or stand?".into(),
+            Step::Tricks { n } => {
+                let done: u8 = s.tricks_won.iter().sum();
+                format!("Trick {} of {n}", (done + 1).min(n))
+            }
+        }
+    }
+
+    /// The seat `k` places after `first` among the seats still in (`first` itself for 0).
+    fn rotated(s: &State, first: Seat, k: u8) -> Seat {
+        let live = Self::order_from(s, first);
+        if live.is_empty() {
+            return first;
+        }
+        live[k as usize % live.len()]
     }
 
     /// Numbers: the middle card just turned. A rank already turned is replaced; otherwise every
@@ -1256,7 +1309,8 @@ impl Scripted {
                         if !s.hit_any {
                             true // everyone stood
                         } else {
-                            let first = self.first_to_act(s);
+                            // The first bettor moves one seat left each hit round (playtest P1-23).
+                            let first = Self::rotated(s, self.first_to_act(s), s.hit_rounds + 1);
                             s.betting.start_street(s.streets, first);
                             s.streets += 1;
                             s.hit_betting = true;
@@ -2744,8 +2798,10 @@ impl Game for Scripted {
                     (p != seat && self.sees_down(s, seat, p)).then(|| s.down[p.index()].clone())
                 })
                 .collect(),
-            own_shown: (self.script.visibility == Visibility::Indian && showdown)
-                .then(|| s.down[seat.index()].clone()),
+            // Indian: your own cards at showdown, or once you've folded (playtest P1-22).
+            own_shown: (self.script.visibility == Visibility::Indian
+                && (showdown || s.betting.is_folded(seat)))
+            .then(|| s.down[seat.index()].clone()),
             own_received: s.received[seat.index()].clone(),
             carry: s.carry.clone(),
         }
@@ -3645,6 +3701,30 @@ impl Game for Scripted {
         );
         let b = &s.betting;
         let indian = self.script.visibility == Visibility::Indian;
+        // Trick-taking: the cards of the trick being played, or of the last one until the next
+        // trick starts, in front of whoever played them (playtest P1-25).
+        let tricks = self
+            .script
+            .steps
+            .iter()
+            .any(|st| matches!(st, Step::Tricks { .. }));
+        let mut trick_cards: Vec<Vec<Card>> = vec![Vec::new(); obs.setup.num_seats as usize];
+        if tricks {
+            let mut fresh = true;
+            for e in &obs.history {
+                match *e {
+                    Event::Played(q, c) => {
+                        if fresh {
+                            trick_cards.iter_mut().for_each(Vec::clear);
+                            fresh = false;
+                        }
+                        trick_cards[q.index()].push(c);
+                    }
+                    Event::TrickWon(_) => fresh = true,
+                    _ => {}
+                }
+            }
+        }
         let seats = obs
             .setup
             .seats()
@@ -3677,6 +3757,21 @@ impl Game for Scripted {
                     vec![CardSlot::Down(None); count]
                 };
                 v.cards.extend(s.up[i].iter().map(|&c| CardSlot::Up(c)));
+                // Mama's Favorite: once split, the face-down cards are shown in their pairs.
+                if p == obs.seat
+                    && obs.history.contains(&Event::Arranged(p))
+                    && count.is_multiple_of(2)
+                    && count > 0
+                {
+                    v.groups = vec![2; count / 2];
+                    if !s.up[i].is_empty() {
+                        v.groups.push(s.up[i].len() as u8);
+                    }
+                }
+                if tricks {
+                    v.tricks = Some(s.tricks_won[i]);
+                    v.played = trick_cards[i].clone();
+                }
                 if p == obs.setup.chooser {
                     v.badges.push("chooser".into());
                 }
@@ -3753,7 +3848,7 @@ impl Game for Scripted {
         TableView {
             game: self.meta.display_name.into(),
             phase: match self.step(&s) {
-                Some(step) if !s.done => format!("{step:?}"),
+                Some(step) if !s.done => Self::phase_label(&s, step),
                 _ => "Showdown".into(),
             },
             viewer: obs.seat,
@@ -3843,6 +3938,102 @@ impl Game for Scripted {
                     p[0], p[1], p[2], p[3], p[4], p[5]
                 )
             }
+        }
+    }
+
+    fn describe_action_in(&self, s: &State, a: Action) -> String {
+        let Action::Choose(k) = a else {
+            return self.describe_action(a);
+        };
+        let Some(&(_, prompt)) = s.prompts.front() else {
+            return self.describe_action(a);
+        };
+        let hit = matches!(self.step(s), Some(Step::HitRounds { .. }));
+        match (prompt, k) {
+            (Prompt::UpOrDown, 0) => "face down".into(),
+            (Prompt::UpOrDown, _) => "face up".into(),
+            (Prompt::PushOrKeep, 0) => "keep it".into(),
+            (Prompt::PushOrKeep, _) => "push it ($1)".into(),
+            (Prompt::KeepOrReplace, 0) => "keep it".into(),
+            (Prompt::KeepOrReplace, _) => "take the next card ($1)".into(),
+            (Prompt::Take, 0) if hit => "stand".into(),
+            (Prompt::Take, _) if hit => "hit".into(),
+            (Prompt::Take, 0) => "no card".into(),
+            (Prompt::Take, _) => "take a card".into(),
+            (Prompt::Pick, k) => match s.middle.get(k as usize) {
+                Some(c) => format!("take {c}"),
+                None => format!("take card {}", k + 1),
+            },
+            (Prompt::Buy, k) => match (self.step(s), k) {
+                (_, 0) => "no thanks".into(),
+                (Some(Step::BuyCard { up, .. }), 1) => format!("buy face up ({up})"),
+                (Some(Step::BuyCard { down, .. }), _) => format!("buy face down ({down})"),
+                _ => format!("choose {k}"),
+            },
+        }
+    }
+
+    fn action_cards(&self, s: &State, a: Action) -> Option<engine::view::CardPick> {
+        use engine::view::{CardPick, PickMode};
+        let ToAct::Seat(p) = self.to_act(s) else {
+            return None;
+        };
+        let bits = |m: u8| (0..8u8).filter(|i| m & (1 << i) != 0).collect::<Vec<u8>>();
+        let pick = |mode, positions| Some(CardPick { mode, positions });
+        match a {
+            Action::Draw(m) | Action::Pass(m) => pick(PickMode::Select, bits(m)),
+            Action::Arrange(k) => pick(PickMode::Pairs, PAIRINGS[k as usize].to_vec()),
+            Action::Order(i) => {
+                let n = s.down[p.index()].len();
+                pick(
+                    PickMode::Sequence,
+                    permutation(n, i as usize).iter().copied().collect(),
+                )
+            }
+            Action::PlayCard(c) => {
+                let at = s.own(p).iter().position(|&x| x == c)?;
+                pick(PickMode::Play, vec![at as u8])
+            }
+            _ => None,
+        }
+    }
+
+    fn simultaneous(&self, s: &State) -> Option<u32> {
+        if !s.prompts.is_empty() || s.pending.is_empty() || s.done {
+            return None;
+        }
+        match self.step(s)? {
+            Step::Declare
+            | Step::Draw { .. }
+            | Step::Discard { .. }
+            | Step::PairUp
+            | Step::Pass(_)
+            | Step::InOut { .. }
+            | Step::Order
+            | Step::PlayRound { .. } => Some(s.pc as u32 * 4),
+            Step::BidRound { .. } => Some(s.pc as u32 * 4 + s.bid_phase as u32),
+            _ => None,
+        }
+    }
+
+    fn next_deal_after(&self, s: &State) -> Option<Seat> {
+        // Scare-a-moosh: the next deal goes left of the declarer who won (playtest P1-21).
+        if self.script.resolution != Resolution::Declarer || !self.settle(s).1.over {
+            return None;
+        }
+        s.named.map(|(d, _, _)| d)
+    }
+
+    fn parse_action(&self, input: &str, _legal: &[Action]) -> Option<Action> {
+        let mut w = input.split_whitespace();
+        match (w.next()?, w.next()) {
+            ("f", None) => Some(Action::Fold),
+            ("c" | "k", None) => Some(Action::CheckCall),
+            ("r" | "b", Some(x)) => {
+                let dollars: f64 = x.trim_start_matches('$').parse().ok()?;
+                Some(Action::RaiseTo(Chips::dollars(dollars)))
+            }
+            _ => None,
         }
     }
 }
@@ -3935,7 +4126,7 @@ pub struct Observation {
     pub declarations: Option<Vec<Option<u8>>>,
     /// Other seats' current face-down cards when this seat can see them.
     pub shown: Vec<Option<SmallVec<[Card; 8]>>>,
-    /// Indian games: this seat's own cards, revealed at showdown.
+    /// Indian games: this seat's own cards, revealed at showdown or when it folds.
     pub own_shown: Option<SmallVec<[Card; 8]>>,
     /// Cards passed to this seat, in order.
     pub own_received: SmallVec<[Card; 8]>,

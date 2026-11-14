@@ -63,6 +63,46 @@ pub async fn me(State(state): State<Shared>, Authed(acc): Authed) -> ApiResult<M
     }))
 }
 
+/// `GET /api/avatar/{account}`: the account's Discord profile picture, fetched through this
+/// server so it loads inside Discord's Activity frame (which blocks other hosts). No sign-in:
+/// `<img>` requests carry no bearer token, and Discord avatars are public anyway.
+pub async fn avatar(
+    State(state): State<Shared>,
+    Path(id): Path<i64>,
+) -> Result<axum::response::Response, (StatusCode, String)> {
+    use axum::response::IntoResponse;
+    let acc = state.db.lock().unwrap().account(id).map_err(db_err)?;
+    let Some((discord_id, hash)) = acc.and_then(|a| Some((a.discord_id, a.avatar?))) else {
+        return Err(err(StatusCode::NOT_FOUND, "no avatar"));
+    };
+    let ok = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !ok(&discord_id) || !ok(&hash) {
+        return Err(err(StatusCode::NOT_FOUND, "no avatar"));
+    }
+    let url = format!("https://cdn.discordapp.com/avatars/{discord_id}/{hash}.png?size=128");
+    let reply = state
+        .http
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, e.to_string()))?;
+    if !reply.status().is_success() {
+        return Err(err(StatusCode::NOT_FOUND, "no avatar"));
+    }
+    let bytes = reply
+        .bytes()
+        .await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, e.to_string()))?;
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, "image/png"),
+            (axum::http::header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
 pub async fn config(State(state): State<Shared>) -> Json<protocol::ServerConfig> {
     Json(protocol::ServerConfig {
         discord_client_id: state.config.discord_client_id.clone(),
