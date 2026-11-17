@@ -85,7 +85,10 @@ export const server = [
             2,
             2
           ],
-          "tricks": 1
+          "tricks": 1,
+          "second_deck": [
+            1
+          ]
         }
       ],
       "boards": [
@@ -352,6 +355,9 @@ const rest = {
                 58
               ],
               "seat": 0,
+              "second_deck": [
+                1
+              ],
               "stack": 9800,
               "status": "Active",
               "tricks": 1

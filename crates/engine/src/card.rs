@@ -7,6 +7,10 @@
 //!   outside every suit's 13 rank bits, they are invisible to [`CardSet::rank_mask`], so the
 //!   evaluators never see a joker unless a game counts it as wild ([`CardSet::split_wild`]).
 //!
+//! - A second deck (Booray, when a draw runs the first one out) marks its cards with bit 6
+//!   ([`Card::SECOND_DECK`]). A [`CardSet`] can't hold a marked card: games that open a second
+//!   deck keep its cards in a separate set by [`Card::base`].
+//!
 //! Each suit occupies its own 16-bit "lane" of the `u64` (only 13 of the 16 bits are used).
 //! This makes "which ranks do I hold in hearts?" a single shift-and-mask
 //! ([`CardSet::rank_mask`]), which is what the hand evaluators will build on.
@@ -183,6 +187,25 @@ impl Card {
     /// The black joker (index 29).
     pub const BLACK_JOKER: Card = Card(29);
 
+    /// The bit that marks a card from a second deck (never a joker).
+    pub const SECOND_DECK: u8 = 0x40;
+
+    /// This card from the second deck. Panics in debug builds for a joker.
+    pub const fn second(self) -> Card {
+        debug_assert!(!self.is_joker(), "a second deck has no jokers");
+        Card(self.0 | Card::SECOND_DECK)
+    }
+
+    /// Whether this card came from a second deck.
+    pub const fn is_second(self) -> bool {
+        self.0 & Card::SECOND_DECK != 0
+    }
+
+    /// The same card from the first deck.
+    pub const fn base(self) -> Card {
+        Card(self.0 & !Card::SECOND_DECK)
+    }
+
     pub const fn is_joker(self) -> bool {
         self.0 == 13 || self.0 == 29
     }
@@ -196,7 +219,7 @@ impl Card {
     /// The suit. A joker reports the suit lane it's stored in, which means nothing: check
     /// [`Card::is_joker`] first.
     pub const fn suit(self) -> Suit {
-        Suit::ALL[(self.0 >> 4) as usize]
+        Suit::ALL[((self.0 >> 4) & 3) as usize]
     }
 
     /// `None` for a joker.
@@ -208,24 +231,33 @@ impl Card {
         }
     }
 
-    /// The packed byte, 0..=60. Not contiguous: indices 14–15, 30–31, 45–47 are unused (13 and
-    /// 29 are the jokers).
+    /// The packed byte, 0..=60 (plus [`Card::SECOND_DECK`] for a second deck's card). Not
+    /// contiguous: indices 14–15, 30–31, 45–47 are unused (13 and 29 are the jokers).
     pub const fn index(self) -> u8 {
         self.0
     }
 
     /// Inverse of [`Card::index`]. `None` for bytes that aren't a card.
     pub const fn from_index(i: u8) -> Option<Card> {
-        if ((i & 0x0F) < 13 && (i >> 4) < 4) || i == 13 || i == 29 {
+        let second = i & Card::SECOND_DECK != 0;
+        let i = i & !Card::SECOND_DECK;
+        if ((i & 0x0F) < 13 && (i >> 4) < 4) || (!second && (i == 13 || i == 29)) {
+            if second {
+                return Some(Card(i | Card::SECOND_DECK));
+            }
             Some(Card(i))
         } else {
             None
         }
     }
 
-    /// This card's bit within a [`CardSet`].
+    /// This card's bit within a [`CardSet`]. A second deck's card has none.
     const fn bit(self) -> u64 {
-        1u64 << self.0
+        debug_assert!(
+            !self.is_second(),
+            "a CardSet can't hold a second deck's card"
+        );
+        1u64 << (self.0 & !Card::SECOND_DECK)
     }
 }
 
@@ -243,12 +275,16 @@ impl TryFrom<u8> for Card {
     }
 }
 
-/// Prints as `"As"`, `"Td"`, `"2c"`; jokers as `"RJ"` / `"BJ"`.
+/// Prints as `"As"`, `"Td"`, `"2c"`; jokers as `"RJ"` / `"BJ"`; a second deck's card with a
+/// trailing `'` (`"As'"`).
 impl fmt::Display for Card {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Card::RED_JOKER => write!(f, "RJ"),
             Card::BLACK_JOKER => write!(f, "BJ"),
+            _ if self.is_second() => {
+                write!(f, "{}{}'", self.rank().to_char(), self.suit().to_char())
+            }
             _ => write!(f, "{}{}", self.rank().to_char(), self.suit().to_char()),
         }
     }
@@ -272,6 +308,12 @@ impl FromStr for Card {
         }
         if s.eq_ignore_ascii_case("BJ") {
             return Ok(Card::BLACK_JOKER);
+        }
+        if let Some(first) = s.strip_suffix('\'') {
+            return match first.parse::<Card>()? {
+                c if c.is_joker() => Err(ParseCardError(s.to_string())),
+                c => Ok(c.second()),
+            };
         }
         let mut chars = s.chars();
         // Pattern-match exactly two characters. Anything else falls to the error arm.
@@ -619,10 +661,15 @@ mod tests {
     #[test]
     fn every_valid_index_is_a_distinct_card_and_others_are_rejected() {
         let valid: Vec<Card> = (0..=u8::MAX).filter_map(Card::from_index).collect();
-        assert_eq!(valid.len(), 54, "52 cards + 2 jokers");
+        assert_eq!(valid.len(), 106, "52 cards + 2 jokers + a second deck's 52");
         assert_eq!(Card::from_index(13), Some(Card::RED_JOKER));
         assert_eq!(Card::from_index(14), None); // first unused slot in the clubs lane
-        assert_eq!(Card::from_index(64), None); // past the last lane
+        assert_eq!(
+            Card::from_index(64),
+            Some(Card::from_index(0).unwrap().second())
+        );
+        assert_eq!(Card::from_index(64 + 13), None); // no second-deck jokers
+        assert_eq!(Card::from_index(128), None);
     }
 
     #[test]
@@ -794,7 +841,10 @@ mod tests {
         let valid = (0..=255u8)
             .filter(|&i| Card::from_index(i).is_some())
             .count();
-        assert_eq!(valid, 54);
+        assert_eq!(
+            valid, 106,
+            "54 first-deck cards and jokers + 52 second-deck cards"
+        );
     }
 
     #[test]
@@ -846,5 +896,20 @@ mod tests {
             assert!(seen.insert(c), "{c} dealt twice");
         }
         assert_eq!(seen, CardSet::FULL_DECK_WITH_JOKERS);
+    }
+
+    #[test]
+    fn second_deck_cards_keep_rank_and_suit_and_round_trip() {
+        let a: Card = "As".parse().unwrap();
+        let a2 = a.second();
+        assert!(a2.is_second() && !a.is_second());
+        assert_ne!(a, a2);
+        assert_eq!(a2.base(), a);
+        assert_eq!((a2.rank(), a2.suit()), (Rank::Ace, Suit::Spades));
+        assert_eq!(a2.to_string(), "As'");
+        assert_eq!("As'".parse::<Card>().unwrap(), a2);
+        assert!("RJ'".parse::<Card>().is_err());
+        assert_eq!(Card::try_from(a2.index()).unwrap(), a2);
+        assert!(Card::try_from(Card::RED_JOKER.index() | Card::SECOND_DECK).is_err());
     }
 }

@@ -13,6 +13,14 @@ export function isJoker(c: Card): boolean {
   return c === 13 || c === 29;
 }
 
+/** The bit that marks a card from a second deck (Booray, when the draw runs out). */
+const SECOND_DECK = 64;
+
+/** Whether a card came from a second deck. */
+export function isSecondDeck(c: Card): boolean {
+  return (c & SECOND_DECK) !== 0;
+}
+
 export interface CardFace {
   rank: string;
   suit: (typeof SUITS)[number] | "joker";
@@ -27,12 +35,12 @@ export function face(c: Card): CardFace {
     return { rank: "★", suit: "joker", symbol: red ? "R" : "B", alt: red ? "Red joker" : "Black joker" };
   }
   const r = c & 15;
-  const s = c >> 4;
+  const s = (c >> 4) & 3;
   return {
     rank: RANKS[r] === "T" ? "10" : RANKS[r],
     suit: SUITS[s],
     symbol: SUIT_SYMBOLS[s],
-    alt: `${RANK_NAMES[r]} of ${SUIT_NAMES[s]}`,
+    alt: `${RANK_NAMES[r]} of ${SUIT_NAMES[s]}${isSecondDeck(c) ? " (second deck)" : ""}`,
   };
 }
 

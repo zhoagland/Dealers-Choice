@@ -53,6 +53,9 @@ pub struct SeatView {
     /// Tricks taken this hand (trick-taking games only).
     #[serde(default)]
     pub tricks: Option<u8>,
+    /// Positions in `cards` dealt from a second deck (public: its backs look different).
+    #[serde(default)]
+    pub second_deck: Vec<u8>,
 }
 
 impl SeatView {
@@ -68,6 +71,7 @@ impl SeatView {
             played: Vec::new(),
             groups: Vec::new(),
             tricks: None,
+            second_deck: Vec::new(),
         }
     }
 }
