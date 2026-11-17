@@ -1656,27 +1656,32 @@ fn numbers() -> Script {
 
 // ----- G10 Trick-taking -----------------------------------------------------------------------
 
-/// Whooh Ray for Booray: 5 cards (the dealer's last one face up: its suit is trump); In or Out;
-/// one draw; then 5 tricks, the first led by the player left of the dealer (owner, playtest
-/// P1-24), later ones by the last trick's winner (follow suit; highest trump, else highest of the led
-/// suit, ace high, wins). 3 tricks scoop the pot; a player who played and took no trick "fries"
-/// (a stun); every other player who played pays $1. The game repeats (button moving) until someone
-/// scoops and nobody fries.
-/// - **D-BOO-1** without a scoop the pot carries and grows by the stuns and $1 payments.
+/// Whooh Ray for Booray (house rules, owner 2026-11-16): everyone juices $1 on the first hand.
+/// 5 cards each; the player left of the dealer picks one of their cards and shows it to the
+/// table: its suit is trump (the card goes back into their hand). Then In ($1 into the pot) or
+/// Out (out for the rest of the game); one draw of up to 5 cards; then 5 tricks, the first led by
+/// the player left of the dealer, later ones by the last trick's winner (follow suit; highest
+/// trump, else highest of the led suit, ace high, wins). 3 tricks scoop the pot; a player who
+/// played and took no trick is stunned (matches the pot, capped); every other player who played,
+/// the scooper included, adds 50¢. The game repeats (button moving) until someone scoops and
+/// nobody is stunned.
+/// - **D-BOO-1** without a scoop the pot carries and grows by the stuns and 50¢ payments.
 /// - **D-BOO-2** trump can't be led until one has been played (unless a player holds only trumps).
-/// - **D-BOO-3** everyone antes $1 on the first hand; when the game ends, the $1 payments are not
-///   made (the pot isn't played again).
-/// - **D-BOO-4** the draw allows up to 4 of the face-down cards (the trump card stays).
+/// - **D-BOO-3** the $1 juice is on the first hand only; when the game ends, the 50¢ payments are
+///   not made (the pot isn't played again).
+/// - **D-BOO-4** the shown trump card is an ordinary card afterwards: it may be thrown in the
+///   draw, and the trump suit stays.
 /// - **D-BOO-5** if only one player is In, they take every trick (scoop).
-/// - Variation `out_is_out` (the Bible's).
+/// - **D-BOO-6** the stun cap is $10, plus $5 for every stun in the game's earlier hands.
+/// - Variation `stay_in`: going Out sits out only the current hand.
 fn booray() -> Script {
     Script {
         steps: vec![
-            Down(4),
-            DealerUp,
-            InOut { price: Chips::ZERO },
+            Down(5),
+            ShowTrump,
+            InOut { price: Chips(100) },
             Draw {
-                max: 4,
+                max: 5,
                 ace_bonus: false,
             },
             Tricks { n: 5 },
@@ -1687,9 +1692,12 @@ fn booray() -> Script {
         boards: 0,
         length: GameLength::UntilDone { max_hands: 30 },
         resolution: Resolution::Booray,
+        out_is_out: true,
+        // 2: house rules (owner 2026-11-16): shown trump, $1 In, out is out, 50¢, growing cap.
+        version: 2,
         variants: vec![Variant {
-            name: "out_is_out",
-            apply: |s| s.out_is_out = true,
+            name: "stay_in",
+            apply: |s| s.out_is_out = false,
         }],
         ..base(
             "booray",

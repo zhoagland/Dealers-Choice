@@ -911,57 +911,198 @@ fn numbers_throws_neighbours_and_gin_scoops() {
 #[test]
 fn booray_follow_suit_trump_and_scoring() {
     let g = game("booray");
-    // 2 seats, button s0 = dealer. Deal order s1, s0 for 4 down each, then the dealer's card up.
-    // s1: 2c 3c 4c 5c (+ 6c) ; s0: Ah Kh Qh 2d (+ Jh up -> hearts are trump).
+    // 2 seats, button s0 = dealer. Deal order s1, s0, 5 down each.
+    // s1: 2c 3c 4c 5c 7h ; s0: Ah Kh Qh 2d Jh.
     let mut s = carry_hand(
         &g,
         &ScriptCarry::default(),
-        &["2c", "Ah", "3c", "Kh", "4c", "Qh", "5c", "2d", "6c", "Jh"],
+        &["2c", "Ah", "3c", "Kh", "4c", "Qh", "5c", "2d", "7h", "Jh"],
     );
-    assert_eq!(s.trump, Some(engine::Suit::Hearts));
-    g.apply(&mut s, Action::InOut(1));
-    g.apply(&mut s, Action::InOut(1));
-    g.apply(&mut s, Action::Draw(0));
-    g.apply(&mut s, Action::Draw(0));
-    // The seat left of the dealer (s1) leads the first trick (P1-24): any of its clubs.
+    // The seat left of the dealer (s1) shows one of its cards: its suit is trump.
+    assert_eq!(g.to_act(&s), ToAct::Seat(Seat(1)));
     let mut legal = Vec::new();
     g.legal_actions(&s, &mut legal);
-    assert_eq!(g.to_act(&s), ToAct::Seat(Seat(1)));
     assert_eq!(legal.len(), 5);
-    g.apply(&mut s, Action::PlayCard(card("6c")));
+    assert!(legal.iter().all(|a| matches!(a, Action::ShowTrump(_))));
+    g.apply(&mut s, Action::ShowTrump(card("7h")));
+    assert_eq!(s.trump, Some(engine::Suit::Hearts));
+    // The card goes back into the hand, face down.
+    assert!(s.down[1].contains(&card("7h")));
+    assert!(s.up[1].is_empty());
+    // In costs $1.
+    g.apply(&mut s, Action::InOut(1));
+    g.apply(&mut s, Action::InOut(1));
+    assert_eq!(s.betting.contributed()[1], Chips(200), "$1 juice + $1 In");
+    // The draw allows all 5 cards.
+    g.legal_actions(&s, &mut legal);
+    assert!(legal.contains(&Action::Draw(0b11111)));
+    g.apply(&mut s, Action::Draw(0));
+    g.apply(&mut s, Action::Draw(0));
+    // s1 (left of the dealer) leads: no trump until trump is played, so a club.
+    assert_eq!(g.to_act(&s), ToAct::Seat(Seat(1)));
+    g.legal_actions(&s, &mut legal);
+    assert_eq!(legal.len(), 4);
+    assert!(!legal.contains(&Action::PlayCard(card("7h"))));
+    g.apply(&mut s, Action::PlayCard(card("5c")));
     // s0 has no clubs: any card. It trumps with the Jack.
     g.legal_actions(&s, &mut legal);
     assert_eq!(legal.len(), 5);
     g.apply(&mut s, Action::PlayCard(card("Jh")));
-    // s0 won with trump and leads the rest (trump has been played, so hearts may be led).
     assert_eq!(s.tricks_won, vec![1, 0]);
+    // s0 leads trump (broken); s1 must follow with its heart.
     assert_eq!(g.to_act(&s), ToAct::Seat(Seat(0)));
-    for _ in 0..4 {
-        g.legal_actions(&s, &mut legal);
-        g.apply(&mut s, legal[0]);
+    g.apply(&mut s, Action::PlayCard(card("Ah")));
+    g.legal_actions(&s, &mut legal);
+    assert_eq!(legal, vec![Action::PlayCard(card("7h"))]);
+    g.apply(&mut s, Action::PlayCard(card("7h")));
+    for (lead, follow) in [("Kh", "2c"), ("Qh", "3c"), ("2d", "4c")] {
+        g.apply(&mut s, Action::PlayCard(card(lead)));
+        g.apply(&mut s, Action::PlayCard(card(follow)));
+    }
+    assert_eq!(s.tricks_won, vec![5, 0]);
+    assert_eq!(g.to_act(&s), ToAct::Terminal);
+    let c = g.carry_out(&s);
+    // s0 scooped but s1 was stunned: the game goes on. The pot was $6 ($2 dealer ante, $1 + $1
+    // juice, $1 + $1 In); s1's stun matches it ($6, under the $10 cap); the scooper adds 50¢.
+    assert!(!c.over);
+    assert_eq!(c.stuns, 1);
+    assert_eq!(c.pot, 600 + 50);
+    assert_eq!(
+        g.payoffs(&s),
+        vec![Chips(600 - 400 - 50), Chips(-200 - 600)]
+    );
+}
+
+#[test]
+fn booray_stun_cap_grows_five_per_earlier_stun() {
+    let g = game("booray");
+    // Hand 2: button s1, so s0 (left of the dealer) shows trump and leads. $50 carried, 2 stuns
+    // earlier in the game: the cap is $10 + 2 × $5 = $20.
+    let carry = ScriptCarry {
+        pot: 5_000,
+        hands: 1,
+        stuns: 2,
+        ..ScriptCarry::default()
+    };
+    let mut s = carry_hand(
+        &g,
+        &carry,
+        &["Ah", "2c", "Kh", "3c", "Qh", "4c", "Jh", "5c", "2d", "6c"],
+    );
+    assert_eq!(g.to_act(&s), ToAct::Seat(Seat(0)));
+    g.apply(&mut s, Action::ShowTrump(card("Ah")));
+    g.apply(&mut s, Action::InOut(1));
+    g.apply(&mut s, Action::InOut(1));
+    g.apply(&mut s, Action::Draw(0));
+    g.apply(&mut s, Action::Draw(0));
+    // s0 must lead its diamond (no trump lead yet), then holds only trump.
+    let mut legal = Vec::new();
+    g.legal_actions(&s, &mut legal);
+    assert_eq!(legal, vec![Action::PlayCard(card("2d"))]);
+    while g.to_act(&s) != ToAct::Terminal {
         g.legal_actions(&s, &mut legal);
         g.apply(&mut s, legal[0]);
     }
     assert_eq!(s.tricks_won, vec![5, 0]);
     let c = g.carry_out(&s);
-    // s0 scooped but s1 fried: the game goes on with s1's stun in the pot.
     assert!(!c.over);
-    assert!(c.pot > 0);
+    assert_eq!(c.stuns, 3);
+    assert_eq!(c.pot, 2_000 + 50, "a $20 stun and the scooper's 50¢");
 }
 
 #[test]
-fn booray_lone_player_scoops() {
+fn booray_scoop_without_stuns_ends_the_game() {
+    let g = game("booray");
+    // s1: Ac Kc 2h 3h 4h ; s0: 2c 3c Ad Kd Qd. s1 shows Ac: clubs are trump.
+    let mut s = carry_hand(
+        &g,
+        &ScriptCarry::default(),
+        &["Ac", "2c", "Kc", "3c", "2h", "Ad", "3h", "Kd", "4h", "Qd"],
+    );
+    g.apply(&mut s, Action::ShowTrump(card("Ac")));
+    for a in [
+        Action::InOut(1),
+        Action::InOut(1),
+        Action::Draw(0),
+        Action::Draw(0),
+    ] {
+        g.apply(&mut s, a);
+    }
+    for (a, b) in [
+        ("2h", "2c"),
+        ("Ad", "Ac"),
+        ("3h", "3c"),
+        ("Kd", "Kc"),
+        ("4h", "Qd"),
+    ] {
+        g.apply(&mut s, Action::PlayCard(card(a)));
+        g.apply(&mut s, Action::PlayCard(card(b)));
+    }
+    assert_eq!(s.tricks_won, vec![2, 3]);
+    let c = g.carry_out(&s);
+    // s1 scooped and nobody was stunned: the game is over and no 50¢ payments are made.
+    assert!(c.over);
+    assert_eq!(c.pot, 0);
+    assert_eq!(g.payoffs(&s), vec![Chips(-400), Chips(400)]);
+}
+
+#[test]
+fn booray_no_scoop_carries_the_pot_and_everyone_adds_fifty_cents() {
+    let g = game("booray");
+    let mut s = g.new_hand(&HandSetup::simple(3, Chips(10_000)));
+    // Button s0: dealt s1, s2, s0 in turn.
+    let s1 = ["Ac", "Kc", "2h", "3h", "4h"];
+    let s2 = ["Ad", "Kd", "2c", "3s", "4s"];
+    let s0 = ["6h", "7h", "Qd", "Jd", "Ts"];
+    for k in 0..5 {
+        for c in [s1[k], s2[k], s0[k]] {
+            g.apply(&mut s, Action::Deal(card(c)));
+        }
+    }
+    assert_eq!(g.to_act(&s), ToAct::Seat(Seat(1)));
+    g.apply(&mut s, Action::ShowTrump(card("Ac")));
+    for _ in 0..3 {
+        g.apply(&mut s, Action::InOut(1));
+    }
+    for _ in 0..3 {
+        g.apply(&mut s, Action::Draw(0));
+    }
+    let tricks = [
+        ["2h", "3s", "6h"], // s1 leads; s0 wins
+        ["Qd", "Ac", "Kd"], // s0 leads; s1 trumps
+        ["3h", "4s", "7h"], // s1 leads; s0 wins
+        ["Jd", "Kc", "Ad"], // s0 leads; s1 trumps
+        ["4h", "2c", "Ts"], // s1 leads; s2 trumps
+    ];
+    for t in tricks {
+        for c in t {
+            g.apply(&mut s, Action::PlayCard(card(c)));
+        }
+    }
+    assert_eq!(s.tricks_won, vec![2, 2, 1]);
+    let c = g.carry_out(&s);
+    // Nobody took 3: the pot carries, and each player adds 50¢.
+    assert!(!c.over);
+    assert_eq!(c.stuns, 0);
+    let pot: i64 = s.betting.contributed().iter().map(|x| x.0).sum();
+    assert_eq!(c.pot, pot + 150);
+}
+
+#[test]
+fn booray_lone_player_scoops_and_out_is_out() {
     let g = game("booray");
     let mut s = carry_hand(
         &g,
         &ScriptCarry::default(),
         &["2c", "Ah", "3c", "Kh", "4c", "Qh", "5c", "2d", "6c", "Jh"],
     );
+    g.apply(&mut s, Action::ShowTrump(card("6c")));
     g.apply(&mut s, Action::InOut(1));
     g.apply(&mut s, Action::InOut(0));
     let c = g.carry_out(&s);
     assert!(c.over);
-    // Pot: $2 dealer ante (s0) + $1 + $1 antes = $4 to s1.
+    assert_eq!(c.out, 0b01, "s0 went Out: out for the game");
+    // Pot: $2 dealer ante (s0) + $1 + $1 juice + $1 In = $5 to s1.
     assert_eq!(g.payoffs(&s), vec![Chips(-300), Chips(300)]);
 }
 

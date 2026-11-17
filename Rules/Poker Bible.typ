@@ -1341,25 +1341,26 @@ Setup the board with all the cards face down. See diagram below.
 #v(.15in)
 *Hand Construction:* The 5 cards in the players hand.
 #v(.15in)
-*Setup:* Players receive 5 cards.
+*Setup:* Everyone juices the pot with \$1 (first round only). Players receive 5 cards.
 #v(.15in)
 *Game play:*
-+ The player in the dealer position has one of their cards flipped. The suit of that card becomes the trump suit.
-+ Players declare whether they are in or out
-+ A round of drawing
-+ The player in the dealer position leads by placing a none trump card down.
-+ The following players must play the same suit if it is in their hand.
-+ The person who plays the highest value card (Ace high) takes that trick and plays the first card the next round
-+ This continues until all 5 cards are played from everyone's hand.
-+ If the player doesn't have the initial suit the player can play a trump card. Only once a trump card is played can someone lead with trump.
-+ After all 5 cards are played if a player wins 3 tricks they scoop the pot
-+ Then if a player didn't win a trick they "fry" and get hit with a stun
-+ If the player didn't fry the player pays \$1 to the pot
++ The player left of the dealer picks one of their cards and shows it to everyone. The suit of that card becomes the trump suit for the round. The card goes back into their hand.
++ Players declare whether they are in or out. In puts \$1 in the pot. Out is out for the rest of the game.
++ A round of discard and draw: players may draw up to 5 cards
++ The player left of the dealer leads any non-trump card (trump only if that is all they hold)
++ The following players must play the same suit if it is in their hand; otherwise they may play any card, including trump
++ The highest trump takes the trick, otherwise the highest card of the suit led (Ace high). The winner leads the next trick
++ Trump may be led only once a trump has been played (broken), unless the leader holds only trump
++ This continues until all 5 cards are played from everyone's hand
++ A player who wins 3 tricks scoops the pot
++ A player who won no tricks is stunned: they match the pot up to \$10
++ Everyone else who played (the scooper too) adds 50¢ to the pot
++ The stun cap goes up \$5 for every player stunned earlier in the game
 + The dealer position rotates to the left and everyone is dealt a new hand
-+ The game ends when someone scoops the pot and no one fries
++ The game ends when someone scoops the pot and no one is stunned
 #v(.15in)
 *Variations:*
-+ If you're out you're out.
++ Stay in: going out sits out only that round.
 
 
 
