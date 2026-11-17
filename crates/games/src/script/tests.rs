@@ -1232,3 +1232,20 @@ fn indian_folder_sees_own_card() {
             .all(|c| matches!(c, engine::view::CardSlot::Up(_)))
     );
 }
+
+/// Seven players drawing up to five run the deck out: reshuffles meet the follow-suit voids.
+#[test]
+fn booray_seven_seats_reshuffles_pass_conformance() {
+    let g = game("booray");
+    let hands = std::env::var("DC_STRESS_HANDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(40);
+    let cfg = Conformance {
+        hands,
+        seat_counts: vec![7],
+        determinizations: 3,
+        ..Conformance::default()
+    };
+    check_conformance(&g, &cfg);
+}
