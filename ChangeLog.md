@@ -8,6 +8,10 @@
 - Whooh Ray for Booray now plays the house rules (game version 2): the player left of the dealer
   shows a card to set trump, In costs $1, Out is out for the game, the draw allows all 5 cards,
   unstunned players add 50¢ (the scooper too), and the stun cap grows $5 per earlier stun.
+- Booray opens a second deck when the draw runs the first out (game version 3). Its cards lose to
+  the same card from the first deck, and the table draws them with orange backs and peach faces.
+  Engine: `Card::second()` / `is_second()` / `base()` mark a second deck's card;
+  `SeatView::second_deck` lists their positions.
 
 ## 0.1.0 — NPI build (2026-10-10)
 

@@ -87,7 +87,7 @@ function Plate({
         <div className="seat-cards">
           {sv.cards.map((c, i) => (
             <span key={i} data-deal-key={c === "Empty" ? undefined : `s${info.seat}-${i}`}>
-              <CardView slot={c} size="sm" wild={wildFor(view, sv.seat)} />
+              <CardView slot={c} size="sm" wild={wildFor(view, sv.seat)} second={sv.second_deck?.includes(i)} />
             </span>
           ))}
         </div>

@@ -1346,7 +1346,7 @@ Setup the board with all the cards face down. See diagram below.
 *Game play:*
 + The player left of the dealer picks one of their cards and shows it to everyone. The suit of that card becomes the trump suit for the round. The card goes back into their hand.
 + Players declare whether they are in or out. In puts \$1 in the pot. Out is out for the rest of the game.
-+ A round of discard and draw: players may draw up to 5 cards
++ A round of discard and draw: players may draw up to 5 cards. If the deck runs out, a second deck (with different backs) is opened; its cards are worth less than the same card from the first deck
 + The player left of the dealer leads any non-trump card (trump only if that is all they hold)
 + The following players must play the same suit if it is in their hand; otherwise they may play any card, including trump
 + The highest trump takes the trick, otherwise the highest card of the suit led (Ace high). The winner leads the next trick

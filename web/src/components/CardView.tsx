@@ -1,4 +1,4 @@
-import { face } from "../cards";
+import { face, isSecondDeck } from "../cards";
 import type { Card, CardSlot } from "../protocol";
 
 const RANK_INDEX: Record<string, number> = {
@@ -14,14 +14,17 @@ interface Props {
   size?: "sm" | "md" | "lg" | "xl";
   /** Rank indices that are wild for this card's owner. */
   wild?: readonly number[];
+  /** Dealt from a second deck (drawn in its colour). Known from the card when it's visible. */
+  second?: boolean;
 }
 
 function Face({ card, size, wild, privateCard }: { card: Card; size: string; wild: boolean; privateCard: boolean }) {
   const f = face(card);
   const label = f.alt + (privateCard ? " (only you can see it)" : "") + (wild ? ", wild" : "");
+  const deck2 = isSecondDeck(card) ? " deck2" : "";
   return (
     <span
-      className={`card ${size} suit-${f.suit}${privateCard ? " private" : ""}${wild ? " wild" : ""}`}
+      className={`card ${size} suit-${f.suit}${deck2}${privateCard ? " private" : ""}${wild ? " wild" : ""}`}
       role="img"
       aria-label={label}
       title={label}
@@ -33,13 +36,19 @@ function Face({ card, size, wild, privateCard }: { card: Card; size: string; wil
 }
 
 /** One card slot: face up, face down (with the face only for its owner), or empty. */
-export function CardView({ slot, size = "md", wild = [] }: Props) {
+export function CardView({ slot, size = "md", wild = [], second = false }: Props) {
   if (slot === "Empty") return <span className={`card ${size} empty`} aria-label="no card yet" />;
   if ("Up" in slot) {
     return <Face card={slot.Up} size={size} wild={wild.includes(slot.Up & 15)} privateCard={false} />;
   }
   if (slot.Down === null) {
-    return <span className={`card ${size} back`} role="img" aria-label="face-down card" />;
+    return (
+      <span
+        className={`card ${size} back${second ? " deck2" : ""}`}
+        role="img"
+        aria-label={second ? "face-down card (second deck)" : "face-down card"}
+      />
+    );
   }
   return <Face card={slot.Down} size={size} wild={wild.includes(slot.Down & 15)} privateCard />;
 }

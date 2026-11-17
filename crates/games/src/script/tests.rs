@@ -1233,9 +1233,9 @@ fn indian_folder_sees_own_card() {
     );
 }
 
-/// Seven players drawing up to five run the deck out: reshuffles meet the follow-suit voids.
+/// Seven players drawing up to five run the deck out: the second deck meets the follow-suit voids.
 #[test]
-fn booray_seven_seats_reshuffles_pass_conformance() {
+fn booray_seven_seats_second_deck_passes_conformance() {
     let g = game("booray");
     let hands = std::env::var("DC_STRESS_HANDS")
         .ok()
@@ -1248,4 +1248,82 @@ fn booray_seven_seats_reshuffles_pass_conformance() {
         ..Conformance::default()
     };
     check_conformance(&g, &cfg);
+}
+
+#[test]
+fn booray_second_deck_card_loses_to_the_same_card_only() {
+    let c = |x: &str| card(x);
+    let t = |cards: &[Card]| -> Seat {
+        let trick: Vec<(Seat, Card)> = cards
+            .iter()
+            .enumerate()
+            .map(|(i, &x)| (Seat(i as u8), x))
+            .collect();
+        trick_winner(&trick, Some(engine::Suit::Spades))
+    };
+    // Same card: the first deck's wins, whichever order.
+    assert_eq!(t(&[c("9h").second(), c("9h")]), Seat(1));
+    assert_eq!(t(&[c("9h"), c("9h").second()]), Seat(0));
+    // Otherwise a second deck's card is worth its rank.
+    assert_eq!(t(&[c("8h"), c("9h").second()]), Seat(1));
+    assert_eq!(t(&[c("Ah"), c("2s").second()]), Seat(1), "a trump");
+    assert_eq!(t(&[c("2s").second(), c("2s"), c("3s").second()]), Seat(2));
+}
+
+#[test]
+fn booray_second_deck_opens_when_the_draw_runs_out() {
+    let g = game("booray");
+    let n = 7;
+    let mut s = g.new_hand(&HandSetup::simple(n, Chips(10_000)));
+    let mut rng = engine::rng::rng_from_seed(5);
+    let mut legal = Vec::new();
+    let chance = |g: &Scripted, s: &mut State, rng: &mut engine::rng::DetRng| {
+        while g.to_act(s) == ToAct::Chance {
+            let a = g.sample_chance(s, rng);
+            g.apply(s, a);
+        }
+    };
+    chance(&g, &mut s, &mut rng);
+    g.legal_actions(&s, &mut legal);
+    g.apply(&mut s, legal[0]); // show trump
+    for _ in 0..n {
+        g.apply(&mut s, Action::InOut(1));
+    }
+    // Everyone throws all 5: 35 dealt + 35 drawn > 52, so the second deck opens mid-draw.
+    let mut second = 0;
+    while matches!(g.step(&s), Some(Step::Draw { .. })) {
+        if g.to_act(&s) == ToAct::Chance {
+            g.legal_actions(&s, &mut legal);
+            if legal
+                .iter()
+                .all(|a| matches!(a, Action::Deal(c) if c.is_second()))
+            {
+                second += 1;
+            }
+            let a = g.sample_chance(&s, &mut rng);
+            g.apply(&mut s, a);
+        } else {
+            g.apply(&mut s, Action::Draw(0b11111));
+        }
+    }
+    assert_eq!(
+        second,
+        35 - 17,
+        "the first deck's last 17 cards, then the second deck"
+    );
+    let held: Vec<Card> = (0..n).flat_map(|i| s.own(Seat(i))).collect();
+    assert_eq!(held.iter().filter(|c| c.is_second()).count(), 18);
+    // Every seat sees where the second deck's cards are, and the note.
+    let obs = g.observe(&s, Seat(0));
+    assert!(obs.history.contains(&Event::SecondDeck));
+    let view = g.view(&obs);
+    let marked: usize = view.seats.iter().map(|v| v.second_deck.len()).sum();
+    assert_eq!(marked, 18);
+    assert!(view.notes.iter().any(|t| t.contains("Second deck")));
+    // Play it out.
+    while g.to_act(&s) != ToAct::Terminal {
+        g.legal_actions(&s, &mut legal);
+        g.apply(&mut s, legal[0]);
+    }
+    assert_eq!(s.tricks_won.iter().map(|&t| t as u32).sum::<u32>(), 5);
 }

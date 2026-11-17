@@ -317,6 +317,7 @@ mod tests {
         ];
         s.badges = vec!["chooser".into()];
         s.played = vec!["Qs".parse().unwrap()];
+        s.second_deck = vec![1];
         s.groups = vec![2, 2];
         s.tricks = Some(1);
         TableView {

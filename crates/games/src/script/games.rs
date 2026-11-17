@@ -272,6 +272,7 @@ fn base(id: &'static str, name: &'static str, rules_ref: &'static str) -> Script
         ante_first_hand_only: false,
         out_is_out: false,
         orbit_stun: false,
+        second_deck: false,
     }
 }
 
@@ -1673,6 +1674,10 @@ fn numbers() -> Script {
 ///   draw, and the trump suit stays.
 /// - **D-BOO-5** if only one player is In, they take every trick (scoop).
 /// - **D-BOO-6** the stun cap is $10, plus $5 for every stun in the game's earlier hands.
+/// - **D-BOO-7** if the draw runs the deck out, a fresh second deck is opened (no reshuffle of
+///   the discards); a second-deck card loses a trick to the same card from the first deck and
+///   otherwise counts as its rank (owner 2026-11-16). Its backs are a different colour, so which
+///   cards came from it is public.
 /// - Variation `stay_in`: going Out sits out only the current hand.
 fn booray() -> Script {
     Script {
@@ -1693,8 +1698,10 @@ fn booray() -> Script {
         length: GameLength::UntilDone { max_hands: 30 },
         resolution: Resolution::Booray,
         out_is_out: true,
+        second_deck: true,
         // 2: house rules (owner 2026-11-16): shown trump, $1 In, out is out, 50¢, growing cap.
-        version: 2,
+        // 3: a second deck instead of reshuffling the discards (D-BOO-7).
+        version: 3,
         variants: vec![Variant {
             name: "stay_in",
             apply: |s| s.out_is_out = false,

@@ -29,6 +29,8 @@ export interface SeatView {
   groups: readonly number[];
   /** Tricks taken this hand (trick-taking games). */
   tricks: number | null;
+  /** Positions in `cards` dealt from a second deck (drawn in the second deck's colour). */
+  second_deck?: readonly number[];
 }
 
 export type PickMode = "Select" | "Pairs" | "Sequence" | "Play";

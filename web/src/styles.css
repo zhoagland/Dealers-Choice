@@ -19,6 +19,7 @@
   --win: #6dff9e;
   --loss: #ff8a96;
   --card: #fffdf7;
+  --card-2: #ffe1bd;
   --red: #d32f2f;
   --black: #1b1b1b;
   --clubs: var(--black);
@@ -127,6 +128,13 @@ main.full { max-width: none; padding: 0; }
     radial-gradient(circle at 50% 50%, #ffffff22 0 18%, transparent 19%),
     repeating-linear-gradient(45deg, #5b2bd6 0 5px, #7a4bf0 5px 10px);
   border: 3px solid var(--card);
+}
+/* A second deck (Booray, when the draw runs out): orange backs, peach faces. */
+.card.deck2 { background: var(--card-2); }
+.card.back.deck2 {
+  background:
+    radial-gradient(circle at 50% 50%, #ffffff22 0 18%, transparent 19%),
+    repeating-linear-gradient(45deg, #c2410c 0 5px, #f07a2a 5px 10px);
 }
 .card.empty { background: #ffffff10; border: 2px dashed #ffffff40; box-shadow: none; }
 .card.private { outline: 3px solid var(--cyan); outline-offset: -3px; }

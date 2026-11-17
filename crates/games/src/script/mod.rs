@@ -234,6 +234,9 @@ pub struct Script {
     /// The game lasts one orbit; on its last hand losers pay half a stun to the winner instead
     /// of into the pot (the Bible's stun variations; D-IC-3, D-DROP-5).
     pub orbit_stun: bool,
+    /// Booray: when the stock runs out, a fresh second deck is opened instead of reshuffling the
+    /// discards; its cards rank just below the same card from the first deck (owner 2026-11-16).
+    pub second_deck: bool,
 }
 
 /// How a hand ends and what carries over (catalog G8).
@@ -522,6 +525,10 @@ pub struct State {
     muck: CardSet,
     /// History lengths at which the muck was reshuffled into the stock.
     reshuffles: Vec<usize>,
+    /// The second deck is open (the stock holds its cards, by [`Card::base`]); and the history
+    /// length when it was opened.
+    second: bool,
+    second_at: Option<usize>,
     /// Seats that swapped this street (Swap Hold'em: at most once per street).
     swapped: u16,
     /// (history index, Ace) for each draw that used the Ace bonus.
@@ -611,6 +618,20 @@ impl State {
             Some(Slot::PoolFlip(_)) => self.pool,
             _ => self.stock,
         }
+    }
+
+    /// The cards the next deal can be: the chance pool, marked as the second deck's once it's
+    /// open.
+    fn chance_cards(&self) -> impl Iterator<Item = Card> + '_ {
+        let second = self.second && !matches!(self.queue.front(), Some(Slot::PoolFlip(_)));
+        self.chance_pool()
+            .iter()
+            .map(move |c| if second { c.second() } else { c })
+    }
+
+    fn can_deal(&self, c: Card) -> bool {
+        let second = self.second && !matches!(self.queue.front(), Some(Slot::PoolFlip(_)));
+        c.is_second() == second && self.chance_pool().contains(c.base())
     }
 
     /// A seat's own cards (down then up).
@@ -929,13 +950,7 @@ impl Scripted {
 
     /// Booray: a full trick goes to the highest trump, else the highest card of the led suit.
     fn finish_trick(&self, s: &mut State) {
-        let led = s.trick[0].1.suit();
-        let trump = s.trump;
-        let &(w, _) = s
-            .trick
-            .iter()
-            .max_by_key(|(_, c)| (Some(c.suit()) == trump, c.suit() == led, c.rank()))
-            .unwrap();
+        let w = trick_winner(&s.trick, s.trump);
         s.tricks_won[w.index()] += 1;
         s.sys_events.push((s.history.len() + 1, Event::TrickWon(w)));
         s.trick.clear();
@@ -1267,6 +1282,12 @@ impl Scripted {
                 return;
             }
             if !s.queue.is_empty() {
+                // Booray: out of cards, so a fresh second deck is opened.
+                if s.stock.is_empty() && self.script.second_deck && !s.second {
+                    s.stock = self.deck();
+                    s.second = true;
+                    s.second_at = Some(s.history.len());
+                }
                 // D-DRAW-1: out of cards, so the discards are shuffled and dealt from.
                 if s.stock.is_empty() && !s.muck.is_empty() {
                     s.stock = s.muck;
@@ -2032,7 +2053,7 @@ impl Scripted {
         let mut kept: SmallVec<[Card; 8]> = SmallVec::new();
         for (i, &c) in hand.iter().enumerate() {
             if m & (1 << i) != 0 {
-                s.muck.insert(c);
+                s.muck.insert(c.base());
             } else {
                 kept.push(c);
             }
@@ -2155,6 +2176,8 @@ impl Game for Scripted {
             stock: self.deck(),
             muck: CardSet::EMPTY,
             reshuffles: Vec::new(),
+            second: false,
+            second_at: None,
             swapped: 0,
             ace_shows: Vec::new(),
             direction: 0,
@@ -2229,7 +2252,7 @@ impl Game for Scripted {
     fn legal_actions(&self, s: &State, out: &mut Vec<Action>) {
         out.clear();
         match self.to_act(s) {
-            ToAct::Chance => out.extend(s.chance_pool().iter().map(Action::Deal)),
+            ToAct::Chance => out.extend(s.chance_cards().map(Action::Deal)),
             ToAct::Terminal => {}
             ToAct::Seat(_) if !s.prompts.is_empty() => {
                 out.extend((0..self.prompt_options(s)).map(Action::Choose))
@@ -2312,7 +2335,7 @@ impl Game for Scripted {
 
     fn validate(&self, s: &State, a: Action) -> Result<(), IllegalAction> {
         match (self.to_act(s), a) {
-            (ToAct::Chance, Action::Deal(c)) if s.chance_pool().contains(c) => Ok(()),
+            (ToAct::Chance, Action::Deal(c)) if s.can_deal(c) => Ok(()),
             (ToAct::Chance, _) => Err(IllegalAction("expected a deal of an undealt card".into())),
             (ToAct::Terminal, _) => Err(IllegalAction("the hand is over".into())),
             (ToAct::Seat(_), Action::Choose(k)) if !s.prompts.is_empty() => {
@@ -2464,7 +2487,7 @@ impl Game for Scripted {
                 if let Slot::PoolFlip(_) = slot {
                     s.pool.remove(c);
                 } else {
-                    s.stock.remove(c);
+                    s.stock.remove(c.base());
                 }
                 match slot {
                     Slot::Down(p) => s.down[p.index()].push(c),
@@ -2694,14 +2717,13 @@ impl Game for Scripted {
 
     fn chance_outcomes(&self, s: &State, out: &mut Vec<(Action, f64)>) {
         out.clear();
-        let from = s.chance_pool();
-        let p = 1.0 / from.len() as f64;
-        out.extend(from.iter().map(|c| (Action::Deal(c), p)));
+        let p = 1.0 / s.chance_pool().len() as f64;
+        out.extend(s.chance_cards().map(|c| (Action::Deal(c), p)));
     }
 
     fn sample_chance(&self, s: &State, rng: &mut DetRng) -> Action {
-        let from = s.chance_pool();
-        Action::Deal(from.iter().nth(rng.random_range(0..from.len())).unwrap())
+        let k = rng.random_range(0..s.chance_pool().len());
+        Action::Deal(s.chance_cards().nth(k).unwrap())
     }
 
     fn payoffs(&self, s: &State) -> Vec<Chips> {
@@ -2741,6 +2763,9 @@ impl Game for Scripted {
             }
             while reshuffles.next_if(|&&r| r == i).is_some() {
                 history.push(Event::Reshuffle);
+            }
+            if s.second_at == Some(i) {
+                history.push(Event::SecondDeck);
             }
             let e = match (who, a) {
                 (None, Action::Deal(c)) => match *slots.next().expect("deal without a slot") {
@@ -2833,6 +2858,9 @@ impl Game for Scripted {
         }
         while reshuffles.next().is_some() {
             history.push(Event::Reshuffle);
+        }
+        if s.second_at == Some(s.history.len()) {
+            history.push(Event::SecondDeck);
         }
         let showdown = s.is_showdown();
         Observation {
@@ -2958,6 +2986,8 @@ impl Game for Scripted {
         let mut hand_slots: Vec<Vec<usize>> = vec![Vec::new(); n];
         let mut slot_epoch: Vec<usize> = Vec::new();
         let mut slot_card: Vec<Option<Card>> = Vec::new();
+        // Booray: slots from this id on were dealt from the second deck.
+        let mut deck2_from: Option<usize> = None;
         let mut deals: Vec<(DealRef, usize)> = Vec::new();
         // Slots thrown away, with the epoch they were thrown in.
         let mut thrown: Vec<(usize, usize)> = Vec::new();
@@ -2995,6 +3025,7 @@ impl Game for Scripted {
             };
         for (ei, e) in obs.history.iter().enumerate() {
             match *e {
+                Event::SecondDeck => deck2_from = Some(slot_epoch.len()),
                 Event::HiddenDeal(p) => {
                     let id = slot_epoch.len();
                     slot_epoch.push(epoch);
@@ -3033,10 +3064,12 @@ impl Game for Scripted {
                     // be in a slot dealt after it: take the latest unknown one.
                     let elsewhere = slot_card.contains(&Some(c));
                     let hs = &mut hand_slots[p.index()];
+                    // A second deck's card fills a slot dealt from it, and the reverse.
+                    let deck2 = |id: usize| deck2_from.is_some_and(|f| id >= f);
                     let unknown = hs
                         .iter()
                         .enumerate()
-                        .filter(|&(_, &id)| slot_card[id].is_none());
+                        .filter(|&(_, &id)| slot_card[id].is_none() && deck2(id) == c.is_second());
                     let at = hs
                         .iter()
                         .position(|&id| slot_card[id] == Some(c))
@@ -3358,13 +3391,38 @@ impl Game for Scripted {
         if epoch == 0 {
             // 3a. No reshuffle: sample the unknown current hands through the sampler (ranges
             //     apply), then unknown thrown-away cards uniformly.
+            // Booray's second deck first: its unknown cards come from a fresh deck, avoiding
+            // the suits their holder has shown it lacks.
+            if let Some(from) = deck2_from {
+                let voids = self.booray_voids(obs, n);
+                let mut left = self.deck();
+                for c in slot_card.iter().flatten().filter(|c| c.is_second()) {
+                    left.remove(c.base());
+                }
+                for (p, hs) in hand_slots.iter().enumerate() {
+                    for &id in hs.iter().filter(|&&id| id >= from) {
+                        if slot_card[id].is_none() {
+                            let ok = left.difference(voids[p]);
+                            let pool = if ok.is_empty() { left } else { ok };
+                            let c = pool.iter().nth(rng.random_range(0..pool.len())).unwrap();
+                            left.remove(c);
+                            slot_card[id] = Some(c.second());
+                        }
+                    }
+                }
+                for c in slot_card[from..].iter_mut().filter(|c| c.is_none()) {
+                    let x = left.iter().nth(rng.random_range(0..left.len())).unwrap();
+                    left.remove(x);
+                    *c = Some(x.second());
+                }
+            }
             let mut known = CardSet::EMPTY;
             for (d, _) in &deals {
                 if let DealRef::Known(c) = d {
                     known.insert(*c);
                 }
             }
-            for c in slot_card.iter().flatten() {
+            for c in slot_card.iter().flatten().filter(|c| !c.is_second()) {
                 known.insert(*c);
             }
             let requests: Vec<(Seat, usize)> = (0..n)
@@ -3648,7 +3706,7 @@ impl Game for Scripted {
                 Event::PlayResolved(_) | Event::Showed(..) | Event::Discarded(..) => {}
                 Event::Played(_, c) => actions.push(Action::PlayCard(c)),
                 Event::TrumpShown(_, c) => actions.push(Action::ShowTrump(c)),
-                Event::TrickWon(_) => {}
+                Event::TrickWon(_) | Event::SecondDeck => {}
                 Event::Middle(_) | Event::BidShown(..) => {}
                 Event::HiddenDeal(_)
                 | Event::Up(..)
@@ -3750,7 +3808,14 @@ impl Game for Scripted {
         if !matches!(rule.ranking, Ranking::High) {
             return None;
         }
-        let mut cards: Vec<Card> = s.own(seat).into_iter().collect();
+        // A second deck's card counts as the same card from the first (no duplicates).
+        let mut cards: Vec<Card> = s
+            .own(seat)
+            .into_iter()
+            .map(Card::base)
+            .collect::<CardSet>()
+            .iter()
+            .collect();
         if let Some(b) = s.boards.first() {
             cards.extend(b.iter().copied());
         }
@@ -3899,6 +3964,15 @@ impl Game for Scripted {
                     v.tricks = Some(s.tricks_won[i]);
                     v.played = trick_cards[i].clone();
                 }
+                // Which cards came from a second deck is public (its backs look different);
+                // a determinization deals second-deck slots second-deck cards.
+                v.second_deck = s.down[i]
+                    .iter()
+                    .chain(&s.up[i])
+                    .enumerate()
+                    .filter(|(_, c)| c.is_second())
+                    .map(|(k, _)| k as u8)
+                    .collect();
                 if p == obs.setup.chooser {
                     v.badges.push("chooser".into());
                 }
@@ -3974,6 +4048,9 @@ impl Game for Scripted {
         }
         if obs.history.contains(&Event::Reshuffle) {
             notes.push("The discards were reshuffled".into());
+        }
+        if obs.history.contains(&Event::SecondDeck) {
+            notes.push("Second deck in play: it loses to the same card from the first".into());
         }
         if let Some(t) = s.trump {
             notes.push(format!("Trump: {}", suit_name(t)));
@@ -4201,6 +4278,8 @@ pub enum Event {
     Arranged(Seat),
     /// The stock ran out; the discards were shuffled into a new stock (D-DRAW-1).
     Reshuffle,
+    /// Booray: the stock ran out and a fresh second deck was opened; later deals come from it.
+    SecondDeck,
     /// The chooser picked the passing direction (0 = left).
     Direction(u8),
     /// This seat picked its cards to pass.
@@ -4281,4 +4360,22 @@ fn suit_name(su: Suit) -> &'static str {
         Suit::Hearts => "Hearts",
         Suit::Spades => "Spades",
     }
+}
+
+/// Booray: who takes a full trick. The highest trump, else the highest card of the suit led
+/// (ace high); a second deck's card loses to the same card from the first.
+fn trick_winner(trick: &[(Seat, Card)], trump: Option<Suit>) -> Seat {
+    let led = trick[0].1.suit();
+    trick
+        .iter()
+        .max_by_key(|(_, c)| {
+            (
+                Some(c.suit()) == trump,
+                c.suit() == led,
+                c.rank(),
+                !c.is_second(),
+            )
+        })
+        .unwrap()
+        .0
 }
