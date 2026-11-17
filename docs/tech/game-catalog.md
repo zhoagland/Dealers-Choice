@@ -318,9 +318,11 @@ is provisional and listed in the PR for the owner to overrule. Overruling one = 
   numbers.
 
 ### G10 Trick-taking
-- **Whooh Ray for Booray**: 5 cards, dealer's flipped card sets trumps, in/out, one draw, 5 tricks. 3+ tricks scoops
-  the pot; zero tricks = "fry" = stun; everyone else who played pays $1. The game repeats until someone scoops and
-  nobody fries. **D-BOO-1** without a 3-trick winner, the pot carries and grows by the stuns and $1 payments.
+- **Whooh Ray for Booray** (house rules, owner 2026-11-16): $1 juice on the first hand; 5 cards; the player left of
+  the dealer shows one of their cards and its suit is trump; In ($1) or Out for the whole game; one draw of up to 5;
+  5 tricks. 3 tricks scoops the pot; zero tricks = stun (matches the pot up to $10, plus $5 per stun earlier in the
+  game); everyone else who played, the scooper included, adds 50¢. The game repeats until someone scoops and
+  nobody is stunned. **D-BOO-1** without a 3-trick winner, the pot carries and grows by the stuns and 50¢ payments.
   **D-BOO-2** "trump can't be led until played" applies. Variation `out_is_out`.
 
 ## 6. Bots in new games

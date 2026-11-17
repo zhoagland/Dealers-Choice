@@ -5,6 +5,9 @@
 - Phase 2 plans: PRD v0.2 draft (simulation program, full game catalog, web multiplayer) and
   tech plans `docs/tech/{sim-program,game-catalog,web}.md`.
 - Fixed: clippy `unnecessary_sort_by` on Rust 1.98 (`bots::mccfr::best_response`).
+- Whooh Ray for Booray now plays the house rules (game version 2): the player left of the dealer
+  shows a card to set trump, In costs $1, Out is out for the game, the draw allows all 5 cards,
+  unstunned players add 50¢ (the scooper too), and the stun cap grows $5 per earlier stun.
 
 ## 0.1.0 — NPI build (2026-10-10)
 

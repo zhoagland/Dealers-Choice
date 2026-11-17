@@ -126,9 +126,9 @@ pub enum Step {
     /// throws away its cards of that rank and the ranks next to it (D-NUM-1); an empty hand
     /// scoops the pot.
     NumbersFlip,
-    /// Booray: one more card to each seat still in, face down, except the dealer's, which is
-    /// dealt face up and sets the trump suit.
-    DealerUp,
+    /// Booray: the first seat still in left of the dealer shows one of its cards to the table;
+    /// its suit is trump. The card stays in that seat's hand, face down (D-BOO-4).
+    ShowTrump,
     /// Booray: `n` tricks; follow suit; trump can't be led until played (D-BOO-2).
     Tricks { n: u8 },
     /// Red River (D-RR-1..3): one board card then a betting round, repeated while the card just
@@ -252,7 +252,7 @@ pub enum Resolution {
     Declarer,
     /// Tempest Hold'em: ordinary pots; the ante rises each hand until one reaches showdown.
     Tempest,
-    /// Booray: 3 tricks scoop the pot; no trick "fries" (a stun); the others who played pay $1.
+    /// Booray: 3 tricks scoop the pot; no trick is a stun; the others who played pay 50¢.
     Booray,
     /// The stun variations (Iron Cross, 3-2-1 Drop): the hand's winner takes the pot, losers at
     /// showdown are stunned into the next hand's pot; see `Script::orbit_stun`.
@@ -272,6 +272,9 @@ pub struct ScriptCarry {
     /// Tempest: hands since the last showdown.
     pub level: u32,
     pub over: bool,
+    /// Booray: stuns so far this game (each raises the stun cap by $5, D-BOO-6).
+    #[serde(default)]
+    pub stuns: u32,
 }
 
 /// A public decision a seat must make right now (Baseball's extra card, Push, Bullet, Bid…).
@@ -386,6 +389,8 @@ pub enum Action {
     Name(u8),
     /// Booray: play this card to the trick.
     PlayCard(Card),
+    /// Booray: show this card to the table; its suit is trump.
+    ShowTrump(Card),
 }
 
 /// The `idx`-th permutation (lexicographic) of `0..k`.
@@ -826,32 +831,20 @@ impl Scripted {
                 self.start_hit_round(s);
             }
             Step::NumbersFlip => s.queue.push_back(Slot::Board(0)),
-            Step::DealerUp => {
-                let dealer = Self::trick_dealer(s);
-                for p in s.live_from_left() {
-                    s.queue.push_back(if Some(p) == dealer {
-                        Slot::Up(p)
-                    } else {
-                        Slot::Down(p)
-                    });
-                }
+            Step::ShowTrump => {
+                s.pending = Self::order_from(s, s.setup.button.next(s.n()))
+                    .into_iter()
+                    .take(1)
+                    .collect();
             }
             Step::Tricks { n } => {
                 s.tricks_left = n;
                 s.trick.clear();
-                // The seat left of the dealer leads the first trick (owner, playtest P1-24).
-                let dealer = Self::trick_dealer(s).unwrap_or(s.setup.button);
-                s.pending = Self::order_from(s, dealer.next(s.n())).into();
+                // The first seat in left of the dealer leads the first trick (owner, playtest
+                // P1-24).
+                s.pending = Self::order_from(s, s.setup.button.next(s.n())).into();
             }
         }
-    }
-
-    /// Booray's dealer: the button if still in, else the first seat in to its left.
-    fn trick_dealer(s: &State) -> Option<Seat> {
-        let live = s.betting.live_mask();
-        (0..s.n())
-            .map(|k| Seat((s.setup.button.0 + k) % s.n()))
-            .find(|p| live & (1 << p.0) != 0)
     }
 
     /// Seats still in, starting with `first` (or the next one in after it).
@@ -861,6 +854,47 @@ impl Scripted {
             .map(|k| Seat((first.0 + k) % s.n()))
             .filter(|p| live & (1 << p.0) != 0)
             .collect()
+    }
+
+    /// Booray: cards each seat can't hold now, from the play so far. A seat that didn't follow
+    /// suit has none of it left; a seat that led trump before trump was played holds only trumps.
+    fn booray_voids(&self, obs: &Observation, n: usize) -> Vec<CardSet> {
+        let mut forbidden = vec![CardSet::EMPTY; n];
+        let suit_cards =
+            |su: Suit| -> CardSet { self.deck().iter().filter(|c| c.suit() == su).collect() };
+        let mut trump: Option<Suit> = None;
+        let mut trump_played = false;
+        let mut led: Option<Suit> = None;
+        for e in &obs.history {
+            match *e {
+                Event::TrumpShown(_, c) => trump = Some(c.suit()),
+                Event::Played(p, c) => {
+                    match led {
+                        None => {
+                            if Some(c.suit()) == trump && !trump_played {
+                                for su in Suit::ALL {
+                                    if Some(su) != trump {
+                                        forbidden[p.index()] =
+                                            forbidden[p.index()].union(suit_cards(su));
+                                    }
+                                }
+                            }
+                            led = Some(c.suit());
+                        }
+                        Some(l) if c.suit() != l => {
+                            forbidden[p.index()] = forbidden[p.index()].union(suit_cards(l));
+                        }
+                        _ => {}
+                    }
+                    if Some(c.suit()) == trump {
+                        trump_played = true;
+                    }
+                }
+                Event::TrickWon(_) => led = None,
+                _ => {}
+            }
+        }
+        forbidden
     }
 
     /// Booray: the cards `p` may play now.
@@ -932,8 +966,8 @@ impl Scripted {
             | Step::FillPool { .. }
             | Step::FlipPool { .. }
             | Step::DummyIfLone { .. }
-            | Step::NumbersFlip
-            | Step::DealerUp => "Dealing".into(),
+            | Step::NumbersFlip => "Dealing".into(),
+            Step::ShowTrump => "Show a trump card".into(),
             Step::Bet | Step::RedRiver { .. } => "Betting".into(),
             Step::Declare => "Declare".into(),
             Step::Draw { max, .. } => format!("Draw up to {max}"),
@@ -1272,6 +1306,7 @@ impl Scripted {
                 | Step::InOut { .. }
                 | Step::Order
                 | Step::Spit
+                | Step::ShowTrump
                 | Step::ChooseDirection => {
                     while s.pending.front().is_some_and(|&p| s.betting.is_folded(p)) {
                         s.pending.pop_front();
@@ -1297,7 +1332,7 @@ impl Scripted {
                 | Step::FillPool { .. }
                 | Step::FlipPool { .. } => true,
                 Step::UpOrDown | Step::BuyCard { .. } | Step::DummyIfLone { .. } => true,
-                Step::NumbersFlip | Step::DealerUp => true,
+                Step::NumbersFlip => true,
                 Step::Tricks { .. } => {
                     if s.tricks_left > 0 {
                         return;
@@ -1907,18 +1942,20 @@ impl Scripted {
                 } else {
                     total
                 };
-                for pen in stun_amounts(
-                    total,
-                    fried,
-                    s.setup.button,
-                    s.betting.stacks(),
-                    self.stun_rule(),
-                ) {
+                // D-BOO-6: the cap grows $5 for every stun in the game's earlier hands.
+                let rule = StunRule {
+                    base_cap: Chips(1_000 + 500 * carry.stuns as i64),
+                    ..self.stun_rule()
+                };
+                for pen in stun_amounts(total, fried, s.setup.button, s.betting.stacks(), rule) {
                     pay[pen.seat.index()] = pen.amount;
                 }
+                carry.stuns += fried.count_ones();
+                // Everyone else who played adds 50¢, the scooper included.
                 for &i in &played {
-                    if Some(i) != scooper && fried & (1 << i) == 0 {
-                        pay[i] = Chips(100).min(s.betting.stacks()[i]);
+                    if fried & (1 << i) == 0 {
+                        let stack = s.betting.stacks()[i] + win[i];
+                        pay[i] = Chips(50).min(stack);
                     }
                 }
                 carry.pot = base.0 + pay.iter().map(|x| x.0).sum::<i64>();
@@ -2200,6 +2237,11 @@ impl Game for Scripted {
             ToAct::Seat(p) if matches!(self.script.steps[s.pc], Step::Tricks { .. }) => {
                 out.extend(self.playable(s, p).into_iter().map(Action::PlayCard))
             }
+            ToAct::Seat(p) if matches!(self.script.steps[s.pc], Step::ShowTrump) => {
+                let mut hand: Vec<Card> = s.own(p).into_iter().collect();
+                hand.sort();
+                out.extend(hand.into_iter().map(Action::ShowTrump))
+            }
             ToAct::Seat(_) if matches!(self.script.steps[s.pc], Step::PlayRound { .. }) => {
                 out.extend([Action::Play(1), Action::Play(0)])
             }
@@ -2296,6 +2338,12 @@ impl Game for Scripted {
                     )),
                 }
             }
+            (ToAct::Seat(p), a) if matches!(self.script.steps[s.pc], Step::ShowTrump) => match a {
+                Action::ShowTrump(c) if s.own(p).contains(&c) => Ok(()),
+                _ => Err(IllegalAction(
+                    "show one of your cards: its suit is trump".into(),
+                )),
+            },
             (ToAct::Seat(_), a) if matches!(self.script.steps[s.pc], Step::PlayRound { .. }) => {
                 match a {
                     Action::Play(x) if x < 2 => Ok(()),
@@ -2434,9 +2482,6 @@ impl Game for Scripted {
                         s.pool.insert(c);
                     }
                     Slot::Middle => s.middle.push(c),
-                }
-                if matches!(slot, Slot::Up(_)) && self.step(s) == Some(Step::DealerUp) {
-                    s.trump = Some(c.suit());
                 }
                 if matches!(slot, Slot::Board(0)) && self.step(s) == Some(Step::NumbersFlip) {
                     self.numbers_flip(s, c);
@@ -2581,6 +2626,11 @@ impl Game for Scripted {
                 if s.pending.is_empty() {
                     self.finish_trick(s);
                 }
+                Some(p)
+            }
+            Action::ShowTrump(c) => {
+                let p = s.pending.pop_front().expect("no one to show trump");
+                s.trump = Some(c.suit());
                 Some(p)
             }
             Action::Play(x) => {
@@ -2754,6 +2804,7 @@ impl Game for Scripted {
                 }
                 (Some(p), Action::Name(k)) => Event::Named(p, k),
                 (Some(p), Action::PlayCard(c)) => Event::Played(p, c),
+                (Some(p), Action::ShowTrump(c)) => Event::TrumpShown(p, c),
                 (Some(p), Action::Pass(m)) => {
                     if p == seat {
                         own_choices.push(m);
@@ -2848,6 +2899,17 @@ impl Game for Scripted {
                         out |= 1 << p.0
                     }
                     Event::Revealed(p, c) => seen.entry(c).or_default().push((i, p)),
+                    // Booray: the shown trump card stays with its owner through the draw when
+                    // they play it later; otherwise made-up draws throw it first (always
+                    // consistent with what was seen: a card never seen again may be gone).
+                    Event::TrumpShown(p, c) => {
+                        let later = obs.history[i + 1..]
+                            .iter()
+                            .position(|x| *x == Event::Played(p, c));
+                        if let Some(j) = later {
+                            seen.entry(c).or_default().push((i + 1 + j, p));
+                        }
+                    }
                     Event::PassesMade => {
                         let size = pass_sizes.get(round).copied().unwrap_or(0);
                         round += 1;
@@ -2967,23 +3029,42 @@ impl Game for Scripted {
                     choices.push(Action::Play(x));
                 }
                 Event::Played(p, c) => {
-                    // The dealer's face-up trump card isn't a hidden slot.
-                    let was_up = obs.history[..ei]
+                    // A card already placed elsewhere (thrown before a reshuffle) can only
+                    // be in a slot dealt after it: take the latest unknown one.
+                    let elsewhere = slot_card.contains(&Some(c));
+                    let hs = &mut hand_slots[p.index()];
+                    let unknown = hs
                         .iter()
-                        .any(|x| matches!(*x, Event::Up(q, u) if q == p && u == c));
-                    if !was_up {
-                        let hs = &mut hand_slots[p.index()];
-                        let at = hs
-                            .iter()
-                            .position(|&id| slot_card[id] == Some(c))
-                            .or_else(|| hs.iter().position(|&id| slot_card[id].is_none()));
-                        if let Some(at) = at {
-                            let id = hs.remove(at);
-                            slot_card[id] = Some(c);
-                        }
+                        .enumerate()
+                        .filter(|&(_, &id)| slot_card[id].is_none());
+                    let at = hs
+                        .iter()
+                        .position(|&id| slot_card[id] == Some(c))
+                        .or_else(|| {
+                            if elsewhere {
+                                unknown
+                                    .max_by_key(|&(_, &id)| slot_epoch[id])
+                                    .map(|(k, _)| k)
+                            } else {
+                                unknown.map(|(k, _)| k).next()
+                            }
+                        });
+                    if let Some(at) = at {
+                        let id = hs.remove(at);
+                        slot_card[id] = Some(c);
                     }
                 }
                 Event::TrickWon(_) => {}
+                Event::TrumpShown(p, c) => {
+                    let hs = &hand_slots[p.index()];
+                    let at = hs
+                        .iter()
+                        .position(|&id| slot_card[id] == Some(c))
+                        .or_else(|| hs.iter().position(|&id| slot_card[id].is_none()));
+                    if let Some(at) = at {
+                        slot_card[hs[at]] = Some(c);
+                    }
+                }
                 Event::Discarded(p, c) => {
                     let hs = &mut hand_slots[p.index()];
                     let at = hs
@@ -3312,44 +3393,7 @@ impl Game for Scripted {
             // neighbours (it would have thrown them away), so its hidden cards avoid them.
             let mut forbidden = vec![CardSet::EMPTY; n];
             if self.script.resolution == Resolution::Booray {
-                // A seat that didn't follow suit has none of it left; a seat that led trump
-                // before trump was played holds only trumps.
-                let suit_cards = |su: Suit| -> CardSet {
-                    self.deck().iter().filter(|c| c.suit() == su).collect()
-                };
-                let mut trump: Option<Suit> = None;
-                let mut trump_played = false;
-                let mut led: Option<Suit> = None;
-                for e in &obs.history {
-                    match *e {
-                        Event::Up(_, c) if trump.is_none() => trump = Some(c.suit()),
-                        Event::Played(p, c) => {
-                            match led {
-                                None => {
-                                    if Some(c.suit()) == trump && !trump_played {
-                                        for su in Suit::ALL {
-                                            if Some(su) != trump {
-                                                forbidden[p.index()] =
-                                                    forbidden[p.index()].union(suit_cards(su));
-                                            }
-                                        }
-                                    }
-                                    led = Some(c.suit());
-                                }
-                                Some(l) if c.suit() != l => {
-                                    forbidden[p.index()] =
-                                        forbidden[p.index()].union(suit_cards(l));
-                                }
-                                _ => {}
-                            }
-                            if Some(c.suit()) == trump {
-                                trump_played = true;
-                            }
-                        }
-                        Event::TrickWon(_) => led = None,
-                        _ => {}
-                    }
-                }
+                forbidden = self.booray_voids(obs, n);
             }
             if self.script.steps.contains(&Step::NumbersFlip) {
                 let mut out = 0u16;
@@ -3429,6 +3473,20 @@ impl Game for Scripted {
             //     epochs first, so known cards flow back to where they were first dealt), then
             //     sample the first-epoch cards and follow the links.
             let mut link: Vec<Option<usize>> = vec![None; slot_epoch.len()];
+            // Booray: cards a slot's current holder can't have (it showed a void).
+            let voids = if self.script.resolution == Resolution::Booray {
+                self.booray_voids(obs, n)
+            } else {
+                vec![CardSet::EMPTY; n]
+            };
+            let mut cant = vec![CardSet::EMPTY; slot_epoch.len()];
+            for (p, hs) in hand_slots.iter().enumerate() {
+                if p != me.index() {
+                    for &id in hs {
+                        cant[id] = voids[p];
+                    }
+                }
+            }
             for e in (1..=epoch).rev() {
                 let mut window: Vec<usize> = thrown
                     .iter()
@@ -3465,7 +3523,12 @@ impl Game for Scripted {
                         && slot_card[id].is_none()
                         && !window.is_empty()
                     {
-                        link[id] = Some(window.remove(0));
+                        let at = window
+                            .iter()
+                            .position(|&w| slot_card[w].is_none_or(|c| !cant[id].contains(c)))
+                            .unwrap_or(0);
+                        link[id] = Some(window.remove(at));
+                        cant[link[id].unwrap()] = cant[id];
                     }
                 }
             }
@@ -3485,11 +3548,72 @@ impl Game for Scripted {
                     }
                 }
             }
+            let fixed: Vec<bool> = slot_card.iter().map(Option::is_some).collect();
             let mut rest: Vec<Card> = self.deck().difference(known).iter().collect();
             for (id, c) in slot_card.iter_mut().enumerate() {
                 if c.is_none() && slot_epoch[id] == 0 {
                     let i = rng.random_range(0..rest.len());
                     *c = Some(rest.swap_remove(i));
+                }
+            }
+            // Booray: a sampled card must not land in a hand that has shown it's void in that
+            // suit. Each sampled root decides its whole chain of links; swap a bad root's card
+            // with an unused card or another root's card that fits both chains.
+            if self.script.resolution == Resolution::Booray {
+                let voids = self.booray_voids(obs, n);
+                let root_of = |mut id: usize| -> usize {
+                    while let Some(src) = link[id] {
+                        id = src;
+                    }
+                    id
+                };
+                let roots: Vec<usize> = (0..slot_card.len())
+                    .filter(|&id| !fixed[id] && slot_epoch[id] == 0)
+                    .collect();
+                let mut bad = vec![CardSet::EMPTY; slot_card.len()];
+                for (p, hs) in hand_slots.iter().enumerate() {
+                    if p == me.index() {
+                        continue;
+                    }
+                    for &id in hs {
+                        if !fixed[id] {
+                            let r = root_of(id);
+                            bad[r] = bad[r].union(voids[p]);
+                        }
+                    }
+                }
+                for _ in 0..4 {
+                    let mut clean = true;
+                    for &r in &roots {
+                        let c = slot_card[r].unwrap();
+                        if !bad[r].contains(c) {
+                            continue;
+                        }
+                        clean = false;
+                        let spare: Vec<usize> = (0..rest.len())
+                            .filter(|&i| !bad[r].contains(rest[i]))
+                            .collect();
+                        let swaps: Vec<usize> = roots
+                            .iter()
+                            .copied()
+                            .filter(|&r2| {
+                                let c2 = slot_card[r2].unwrap();
+                                r2 != r && !bad[r].contains(c2) && !bad[r2].contains(c)
+                            })
+                            .collect();
+                        let k = rng.random_range(0..(spare.len() + swaps.len()).max(1));
+                        if k < spare.len() {
+                            let i = spare[k];
+                            slot_card[r] = Some(rest[i]);
+                            rest[i] = c;
+                        } else if let Some(&r2) = swaps.get(k - spare.len()) {
+                            slot_card[r] = slot_card[r2];
+                            slot_card[r2] = Some(c);
+                        }
+                    }
+                    if clean {
+                        break;
+                    }
                 }
             }
             // Follow links (a linked slot's source is earlier, so one forward pass suffices
@@ -3523,6 +3647,7 @@ impl Game for Scripted {
                 Event::Named(_, k) => actions.push(Action::Name(k)),
                 Event::PlayResolved(_) | Event::Showed(..) | Event::Discarded(..) => {}
                 Event::Played(_, c) => actions.push(Action::PlayCard(c)),
+                Event::TrumpShown(_, c) => actions.push(Action::ShowTrump(c)),
                 Event::TrickWon(_) => {}
                 Event::Middle(_) | Event::BidShown(..) => {}
                 Event::HiddenDeal(_)
@@ -3608,7 +3733,9 @@ impl Game for Scripted {
             | Action::Bid(_)
             | Action::Play(_)
             | Action::Name(_) => ActionClass::Declare,
-            Action::Choose(_) | Action::PlayCard(_) => ActionClass::CardChoice,
+            Action::Choose(_) | Action::PlayCard(_) | Action::ShowTrump(_) => {
+                ActionClass::CardChoice
+            }
         }
     }
 
@@ -3781,6 +3908,9 @@ impl Game for Scripted {
                             v.badges.push(format!("showed {ace}"));
                         }
                         Event::Swapped(q, k) if q == p => v.badges.push(format!("swapped {k}")),
+                        Event::TrumpShown(q, c) if q == p => {
+                            v.badges.push(format!("showed {c} (trump)"));
+                        }
                         _ => {}
                     }
                 }
@@ -3844,6 +3974,9 @@ impl Game for Scripted {
         }
         if obs.history.contains(&Event::Reshuffle) {
             notes.push("The discards were reshuffled".into());
+        }
+        if let Some(t) = s.trump {
+            notes.push(format!("Trump: {}", suit_name(t)));
         }
         TableView {
             game: self.meta.display_name.into(),
@@ -3918,6 +4051,7 @@ impl Game for Scripted {
             Action::Order(i) => format!("reveal order #{i}"),
             Action::Bid(b) => format!("bid {}", Chips(50 * b as i64)),
             Action::PlayCard(c) => format!("play {c}"),
+            Action::ShowTrump(c) => format!("show {c}: {} are trump", suit_name(c.suit())),
             Action::Fold => "fold".into(),
             Action::CheckCall => "check / call".into(),
             Action::RaiseTo(x) => format!("bet / raise to {x}"),
@@ -3990,7 +4124,7 @@ impl Game for Scripted {
                     permutation(n, i as usize).iter().copied().collect(),
                 )
             }
-            Action::PlayCard(c) => {
+            Action::PlayCard(c) | Action::ShowTrump(c) => {
                 let at = s.own(p).iter().position(|&x| x == c)?;
                 pick(PickMode::Play, vec![at as u8])
             }
@@ -4111,6 +4245,8 @@ pub enum Event {
     Played(Seat, Card),
     /// Booray: this seat took the trick.
     TrickWon(Seat),
+    /// Booray: this seat showed this card; its suit is trump. The card stays in the hand.
+    TrumpShown(Seat, Card),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -4136,3 +4272,13 @@ pub struct Observation {
 
 #[cfg(test)]
 mod tests;
+
+/// A suit's plural name ("Spades").
+fn suit_name(su: Suit) -> &'static str {
+    match su {
+        Suit::Clubs => "Clubs",
+        Suit::Diamonds => "Diamonds",
+        Suit::Hearts => "Hearts",
+        Suit::Spades => "Spades",
+    }
+}

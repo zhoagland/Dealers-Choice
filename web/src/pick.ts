@@ -124,7 +124,7 @@ export function usePicker(prompt: Prompt | null, onChoose: (c: Choice) => void, 
     hint = `Click your cards in the order to show them (${sel.length} of ${total})`;
     confirm = "Lock in order";
   } else {
-    hint = "Click a card to play it";
+    hint = /^show /i.test(opts[0].label) ? "Click a card to show it: its suit is trump" : "Click a card to play it";
   }
   return {
     mode,
